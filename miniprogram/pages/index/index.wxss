@@ -1,0 +1,91 @@
+.home-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+  min-width: 0;
+}
+
+.home-title-row .page-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.header-balance {
+  flex: 0 0 auto;
+  min-width: 132rpx;
+  padding: 12rpx 16rpx;
+  box-sizing: border-box;
+  border-radius: 8rpx;
+  background: #ecfdf5;
+  text-align: right;
+}
+
+.header-balance-value {
+  color: #0f766e;
+  font-size: 34rpx;
+  font-weight: 700;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.header-balance-label {
+  margin-top: 4rpx;
+  color: #475569;
+  font-size: 21rpx;
+  line-height: 1.25;
+}
+
+.selected-file {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+  margin-top: 20rpx;
+  padding: 18rpx;
+  box-sizing: border-box;
+  border-radius: 8rpx;
+  background: #f0fdfa;
+}
+
+.selected-file-name {
+  min-width: 0;
+  flex: 1;
+  color: #115e59;
+  font-size: 25rpx;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.latest-panel {
+  padding-bottom: 22rpx;
+}
+
+.latest-panel:active {
+  background: #f8fafc;
+}
+
+.compact-header {
+  margin-bottom: 14rpx;
+}
+
+.task-link {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  min-width: 0;
+}
+
+.task-link-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.task-link-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}

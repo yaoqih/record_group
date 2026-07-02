@@ -1,0 +1,46 @@
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Runtime state and logs
+var/
+/logs/
+*.log
+*.pid
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Node / frontend builds
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# WeChat miniprogram generated/private files
+miniprogram/miniprogram_npm/
+miniprogram/project.private.config.json
+
+# Local evaluation data and generated ASR results
+data/eval/*.mp3
+data/eval/*.m4a
+data/eval/*.wav
+data/eval/*.aac
+data/eval/*.flac
+data/eval/*.ogg
+data/eval/*.json
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,63 @@
+<view class="page upload-page">
+  <view class="page-header">
+    <view class="eyebrow">RecordFlow</view>
+    <view class="home-title-row">
+      <view class="page-title">录音转写</view>
+      <view wx:if="{{user}}" class="header-balance">
+        <view class="header-balance-value">{{user.points_balance}}</view>
+        <view class="header-balance-label">可用点数</view>
+      </view>
+    </view>
+    <view class="page-subtitle">上传音频文件，确认扣点后生成可播放、可导出的转写文本。</view>
+  </view>
+
+  <view wx:if="{{!user}}" class="panel">
+    <view class="panel-header">
+      <view class="panel-header-main">
+        <view class="panel-title">微信账号登录</view>
+        <view class="panel-note">登录后保存任务和点数余额。</view>
+      </view>
+      <t-icon name="login" size="40rpx" color="#0f766e" />
+    </view>
+    <t-input class="field" value="{{nickname}}" bind:change="onNicknameInput" placeholder="昵称，可不填" />
+    <t-button block theme="primary" icon="login" loading="{{loading}}" disabled="{{loading || uploading}}" bind:tap="onLogin">微信登录</t-button>
+    <view wx:if="{{error}}" class="error-box">{{error}}</view>
+  </view>
+
+  <view class="panel">
+    <view class="panel-header">
+      <view class="panel-header-main">
+        <view class="panel-title">选择文件</view>
+        <view class="panel-note">支持 mp3、m4a、wav、ogg、webm、flac 等音频，单个文件不超过 200MB。</view>
+      </view>
+      <t-icon name="upload" size="40rpx" color="#334155" />
+    </view>
+    <view class="action-stack">
+      <t-button block theme="primary" icon="audio" disabled="{{!user || uploading}}" loading="{{uploading}}" bind:tap="chooseMessageFile">选择音频文件</t-button>
+    </view>
+    <view wx:if="{{selectedName}}" class="selected-file">
+      <t-icon name="file" size="32rpx" color="#0f766e" />
+      <view class="selected-file-name">{{selectedName}}</view>
+    </view>
+    <view wx:if="{{user && error}}" class="error-box">{{error}}</view>
+  </view>
+
+  <view wx:if="{{latestTask}}" class="panel latest-panel" bindtap="openLatestTask">
+    <view class="panel-header compact-header">
+      <view class="panel-header-main">
+        <view class="panel-title">最近上传</view>
+        <view class="panel-note">点按查看详情和确认转写。</view>
+      </view>
+      <t-tag theme="{{latestTask.statusTheme}}" variant="light">{{latestTask.statusLabel}}</t-tag>
+    </view>
+    <view class="task-link">
+      <view class="task-link-main">
+        <view class="task-link-title">{{latestTask.displayTitle}}</view>
+        <view class="meta-line">{{latestTask.summary}}</view>
+      </view>
+      <t-icon name="arrow-right" size="34rpx" color="#94a3b8" />
+    </view>
+  </view>
+
+  <t-toast id="t-toast" />
+</view>

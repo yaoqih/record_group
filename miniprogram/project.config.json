@@ -1,0 +1,15 @@
+{
+  "appid": "wxb69e0d51c2a1f6bf",
+  "projectname": "recordflow-miniapp",
+  "compileType": "miniprogram",
+  "miniprogramRoot": "./",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "postcss": true,
+    "minified": true
+  }
+}

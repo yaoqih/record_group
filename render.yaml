@@ -1,0 +1,106 @@
+services:
+  - type: web
+    name: recordflow-api
+    runtime: docker
+    plan: starter
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: RECORDFLOW_LLM_BASE_URL
+        value: https://yunwu.ai/v1
+      - key: RECORDFLOW_LLM_MODEL
+        value: deepseek-v4-flash
+      - key: RECORDFLOW_LLM_API_KEY
+        sync: false
+      - key: RECORDFLOW_APP_API_KEY
+        sync: false
+      - key: RECORDFLOW_B2_KEY_ID
+        sync: false
+      - key: RECORDFLOW_B2_APPLICATION_KEY
+        sync: false
+      - key: RECORDFLOW_B2_BUCKET_NAME
+        value: record-flow
+      - key: RECORDFLOW_B2_BUCKET_ID
+        sync: false
+      - key: RECORDFLOW_B2_PUBLIC_BASE_URL
+        value: https://f005.backblazeb2.com/file/record-flow
+      - key: RECORDFLOW_B2_CDN_BASE_URL
+        value: https://img.blenet.top/file/record-flow
+      - key: RECORDFLOW_STEPFUN_API_KEY
+        sync: false
+      - key: RECORDFLOW_STEPFUN_BASE_URL
+        value: https://api.stepfun.com
+      - key: RECORDFLOW_STEPFUN_ASR_MODEL
+        value: stepaudio-2.5-asr
+      - key: RECORDFLOW_STEPFUN_ASR_LANGUAGE
+        value: zh
+      - key: RECORDFLOW_STEPFUN_ENABLE_ITN
+        value: "true"
+      - key: RECORDFLOW_STEPFUN_TIMEOUT_SECONDS
+        value: "300"
+
+  - type: worker
+    name: recordflow-compress-worker
+    runtime: docker
+    plan: starter
+    dockerCommand: python -m recordflow_agent.worker --types compress_media
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: RECORDFLOW_LLM_BASE_URL
+        value: https://yunwu.ai/v1
+      - key: RECORDFLOW_LLM_MODEL
+        value: deepseek-v4-flash
+      - key: RECORDFLOW_LLM_API_KEY
+        sync: false
+      - key: RECORDFLOW_B2_KEY_ID
+        sync: false
+      - key: RECORDFLOW_B2_APPLICATION_KEY
+        sync: false
+      - key: RECORDFLOW_B2_BUCKET_NAME
+        value: record-flow
+      - key: RECORDFLOW_B2_BUCKET_ID
+        sync: false
+      - key: RECORDFLOW_B2_PUBLIC_BASE_URL
+        value: https://f005.backblazeb2.com/file/record-flow
+      - key: RECORDFLOW_B2_CDN_BASE_URL
+        value: https://img.blenet.top/file/record-flow
+
+  - type: worker
+    name: recordflow-asr-worker
+    runtime: docker
+    plan: starter
+    dockerCommand: python -m recordflow_agent.worker --types transcribe_media,process_record
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: RECORDFLOW_LLM_BASE_URL
+        value: https://yunwu.ai/v1
+      - key: RECORDFLOW_LLM_MODEL
+        value: deepseek-v4-flash
+      - key: RECORDFLOW_LLM_API_KEY
+        sync: false
+      - key: RECORDFLOW_B2_KEY_ID
+        sync: false
+      - key: RECORDFLOW_B2_APPLICATION_KEY
+        sync: false
+      - key: RECORDFLOW_B2_BUCKET_NAME
+        value: record-flow
+      - key: RECORDFLOW_B2_BUCKET_ID
+        sync: false
+      - key: RECORDFLOW_B2_PUBLIC_BASE_URL
+        value: https://f005.backblazeb2.com/file/record-flow
+      - key: RECORDFLOW_B2_CDN_BASE_URL
+        value: https://img.blenet.top/file/record-flow
+      - key: RECORDFLOW_STEPFUN_API_KEY
+        sync: false
+      - key: RECORDFLOW_STEPFUN_BASE_URL
+        value: https://api.stepfun.com
+      - key: RECORDFLOW_STEPFUN_ASR_MODEL
+        value: stepaudio-2.5-asr
+      - key: RECORDFLOW_STEPFUN_ASR_LANGUAGE
+        value: zh
+      - key: RECORDFLOW_STEPFUN_ENABLE_ITN
+        value: "true"
+      - key: RECORDFLOW_STEPFUN_TIMEOUT_SECONDS
+        value: "300"

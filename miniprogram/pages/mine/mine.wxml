@@ -1,0 +1,56 @@
+<view class="page mine-page">
+  <view class="page-header">
+    <view class="eyebrow">Account</view>
+    <view class="mine-title-row">
+      <view class="page-title">我的</view>
+      <view wx:if="{{user}}" class="user-id-pill" bindtap="copyUserId">
+        <view class="user-id-text">ID {{user.id}}</view>
+        <t-icon name="copy" size="28rpx" color="#0f766e" />
+      </view>
+    </view>
+    <view class="page-subtitle">{{headerSubtitle}}</view>
+  </view>
+
+  <view wx:if="{{user}}" class="panel wallet-panel">
+    <view class="wallet-balance">
+      <view class="wallet-label">可用点数</view>
+      <view class="wallet-value">{{user.points_balance}}</view>
+    </view>
+  </view>
+
+  <view wx:if="{{user}}" class="panel recharge-panel">
+    <view class="panel-header">
+      <view class="panel-header-main">
+        <view class="panel-title">充值</view>
+        <view class="panel-note">1 点 ¥0.01，自定义范围 10-10000 点。</view>
+      </view>
+      <t-icon name="logo-wechatpay" size="42rpx" color="#0f766e" />
+    </view>
+    <view class="pay-grid">
+      <t-button block theme="light" icon="money" loading="{{payingPoints == 100}}" disabled="{{paying}}" data-points="100" bind:tap="recharge">100 点 ¥1</t-button>
+      <t-button block theme="light" icon="money" loading="{{payingPoints == 500}}" disabled="{{paying}}" data-points="500" bind:tap="recharge">500 点 ¥5</t-button>
+      <t-button block theme="light" icon="money" loading="{{payingPoints == 1000}}" disabled="{{paying}}" data-points="1000" bind:tap="recharge">1000 点 ¥10</t-button>
+    </view>
+    <view class="custom-pay">
+      <t-input class="custom-input" type="number" value="{{customPoints}}" bind:change="onCustomPointsInput" placeholder="10-10000 点" />
+      <t-button class="custom-button" theme="primary" icon="wallet" loading="{{payingCustom}}" disabled="{{paying}}" bind:tap="recharge">自定义充值</t-button>
+    </view>
+  </view>
+
+  <view wx:if="{{!user}}" class="panel">
+    <t-empty class="empty-panel" icon="login" description="请先到上传页登录">
+      <t-button slot="action" class="empty-action" theme="primary" size="small" bind:tap="goLogin">去登录</t-button>
+    </t-empty>
+  </view>
+
+  <view class="panel manage-panel">
+    <view class="action-stack">
+      <t-button block theme="light" loading="{{loading}}" disabled="{{loading}}" bind:tap="loadMe">刷新账户</t-button>
+      <t-button wx:if="{{user}}" block theme="danger" icon="logout" disabled="{{paying}}" bind:tap="logout">退出登录</t-button>
+    </view>
+  </view>
+
+  <view wx:if="{{error}}" class="error-box">{{error}}</view>
+
+  <t-toast id="t-toast" />
+</view>

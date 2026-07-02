@@ -1,0 +1,50 @@
+<view class="page tasks-page">
+  <view class="page-header tasks-header">
+    <view class="row">
+      <view class="row-main">
+        <view class="eyebrow">Tasks</view>
+        <view class="page-title">任务</view>
+        <view class="page-subtitle">{{headerSubtitle}}</view>
+      </view>
+      <t-button theme="light" size="small" loading="{{loading}}" disabled="{{loading}}" bind:tap="loadTasks">刷新</t-button>
+    </view>
+  </view>
+
+  <view wx:if="{{!hasSession}}" class="panel">
+    <t-empty class="empty-panel" icon="login" description="请先登录后查看任务">
+      <t-button slot="action" class="empty-action" theme="primary" size="small" bind:tap="goLogin">去登录</t-button>
+    </t-empty>
+  </view>
+
+  <view wx:elif="{{isEmpty}}" class="panel">
+    <t-empty class="empty-panel" icon="task" description="暂无任务">
+      <t-button slot="action" class="empty-action" theme="primary" size="small" bind:tap="goLogin">上传文件</t-button>
+    </t-empty>
+  </view>
+
+  <view wx:else class="task-list">
+    <view
+      wx:for="{{tasks}}"
+      wx:key="id"
+      class="task-row"
+      data-id="{{item.id}}"
+      bindtap="openTask"
+    >
+      <view class="task-row-main">
+        <view class="task-row-top">
+          <view class="task-title">{{item.displayTitle}}</view>
+          <t-tag theme="{{item.statusTheme}}" variant="light">{{item.statusLabel}}</t-tag>
+        </view>
+        <view class="task-meta">
+          <view>{{item.durationText}}</view>
+          <view>{{item.pointsText}}</view>
+          <view>{{item.createdText}}</view>
+        </view>
+        <view wx:if="{{item.status == 'failed' && item.error}}" class="task-error">{{item.error}}</view>
+      </view>
+      <t-icon name="arrow-right" size="34rpx" color="#94a3b8" />
+    </view>
+  </view>
+
+  <view wx:if="{{error}}" class="error-box">{{error}}</view>
+</view>

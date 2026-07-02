@@ -1,0 +1,50 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/tasks/tasks",
+    "pages/task/task",
+    "pages/mine/mine"
+  ],
+  "window": {
+    "navigationBarTitleText": "RecordFlow",
+    "navigationBarBackgroundColor": "#f8fafc",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f8fafc"
+  },
+  "usingComponents": {
+    "t-button": "tdesign-miniprogram/button/button",
+    "t-input": "tdesign-miniprogram/input/input",
+    "t-tag": "tdesign-miniprogram/tag/tag",
+    "t-icon": "tdesign-miniprogram/icon/icon",
+    "t-empty": "tdesign-miniprogram/empty/empty",
+    "t-slider": "tdesign-miniprogram/slider/slider",
+    "t-toast": "tdesign-miniprogram/toast/toast",
+    "t-dialog": "tdesign-miniprogram/dialog/dialog"
+  },
+  "tabBar": {
+    "color": "#64748b",
+    "selectedColor": "#0f766e",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "上传",
+        "iconPath": "assets/tabbar/upload.png",
+        "selectedIconPath": "assets/tabbar/upload-active.png"
+      },
+      {
+        "pagePath": "pages/tasks/tasks",
+        "text": "任务",
+        "iconPath": "assets/tabbar/tasks.png",
+        "selectedIconPath": "assets/tabbar/tasks-active.png"
+      },
+      {
+        "pagePath": "pages/mine/mine",
+        "text": "我的",
+        "iconPath": "assets/tabbar/mine.png",
+        "selectedIconPath": "assets/tabbar/mine-active.png"
+      }
+    ]
+  }
+}
