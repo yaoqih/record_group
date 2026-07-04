@@ -902,28 +902,32 @@ def task_editor_row(row: dict[str, Any]) -> dict[str, Any]:
 def extract_task_utterances(raw_result: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_result, dict):
         return []
-    result_items = raw_result.get("result")
     utterances: list[dict[str, Any]] = []
-    if isinstance(result_items, list):
+
+    def append_raw_utterances(raw_utterances: Any) -> None:
+        if not isinstance(raw_utterances, list):
+            return
+        for utterance in raw_utterances:
+            if not isinstance(utterance, dict):
+                continue
+            utterances.append(
+                {
+                    "text": str(utterance.get("text") or "").strip(),
+                    "start_time": int(utterance.get("start_time") or 0),
+                    "end_time": int(utterance.get("end_time") or 0),
+                    "words": merge_word_chunks(
+                        utterance.get("words") if isinstance(utterance.get("words"), list) else []
+                    ),
+                }
+            )
+
+    append_raw_utterances(raw_result.get("utterances"))
+    result_items = raw_result.get("result")
+    if not utterances and isinstance(result_items, list):
         for item in result_items:
             if not isinstance(item, dict):
                 continue
-            item_utterances = item.get("utterances")
-            if not isinstance(item_utterances, list):
-                continue
-            for utterance in item_utterances:
-                if not isinstance(utterance, dict):
-                    continue
-                utterances.append(
-                    {
-                        "text": str(utterance.get("text") or "").strip(),
-                        "start_time": int(utterance.get("start_time") or 0),
-                        "end_time": int(utterance.get("end_time") or 0),
-                        "words": merge_word_chunks(
-                            utterance.get("words") if isinstance(utterance.get("words"), list) else []
-                        ),
-                    }
-                )
+            append_raw_utterances(item.get("utterances"))
     if utterances:
         return split_large_utterances(utterances)
     return extract_delta_utterances(raw_result)

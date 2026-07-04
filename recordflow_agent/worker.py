@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request
 
-from recordflow_agent.asr_site import ASRSiteStore, remove_local_file_if_exists
+from recordflow_agent.asr_site import ASRSiteStore, build_editable_utterances, remove_local_file_if_exists
 from recordflow_agent.asr_client import (
     STEPFUN_MAX_AUDIO_DATA_BYTES,
     StepFunASRClient,
@@ -205,13 +205,15 @@ def process_media_transcription_job(repo: object, job: dict) -> None:
             content_type = "audio/ogg"
         result = asr_client.transcribe_bytes(data=data, filename=filename, content_type=content_type)
     task_id = result.get("task_id") or result.get("session_id")
+    raw_asr_result = result.get("raw_result") or result
+    media_utterances = build_editable_utterances(raw_result=raw_asr_result, transcript_text=result["text"])
     repo.update_media_status(
         media["id"],
         "transcribed",
         asr_task_id=task_id,
         transcript_text=result["text"],
-        utterances=result.get("utterances") or [],
-        raw_asr_result=result.get("raw_result") or result,
+        utterances=media_utterances,
+        raw_asr_result=raw_asr_result,
     )
     with open_site_store_if_available(repo) as store:
         if store is not None:
@@ -219,7 +221,7 @@ def process_media_transcription_job(repo: object, job: dict) -> None:
                 media["id"],
                 "completed",
                 transcript_text=result["text"],
-                raw_result=result.get("raw_result") or result,
+                raw_result=raw_asr_result,
             )
     profile = load_profile(workspace.profile)
     digest = process_record(

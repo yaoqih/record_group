@@ -299,6 +299,79 @@ def test_worker_uses_file_asr_for_utterances_when_enabled(tmp_path, monkeypatch)
     repo.close()
 
 
+def test_worker_splits_large_file_asr_utterance_before_persisting_media(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    profile = load_profile("project_meeting")
+    workspace_id = repo.create_workspace("RecordFlow product", profile.name)
+    media_id = repo.add_media_record(
+        workspace_id=workspace_id,
+        source_name="meeting.wav",
+        stored_name="meeting.ogg",
+        url="https://img.blenet.top/file/record-flow/uploads/meeting.ogg",
+        public_url="https://f005.backblazeb2.com/file/record-flow/uploads/meeting.ogg",
+        object_name="uploads/meeting.ogg",
+        content_type="audio/ogg",
+        original_size_bytes=1000,
+        compressed_size_bytes=11,
+        compression_codec="audio/ogg;codecs=opus",
+    )
+    job_id = repo.enqueue_media_transcription_job(
+        workspace_id=workspace_id,
+        media_id=media_id,
+        title="meeting audio",
+        use_llm=False,
+    )
+    words = [
+        {
+            "text": f"会议内容{i}{'，' if i == 7 else '。' if i == 15 else ''}",
+            "start_time": i * 500,
+            "end_time": (i + 1) * 500,
+        }
+        for i in range(16)
+    ]
+    text = "".join(word["text"] for word in words)
+
+    class FakeASRClient:
+        config = type("Config", (), {"timeout_seconds": 30, "show_utterances": True})()
+
+        def transcribe_url(self, url, content_type):
+            return {
+                "task_id": "file-task-id",
+                "text": text,
+                "utterances": [
+                    {"text": text, "start_time": 0, "end_time": 8000, "words": words},
+                ],
+                "raw_result": {
+                    "result": [
+                        {
+                            "text": text,
+                            "utterances": [
+                                {"text": text, "start_time": 0, "end_time": 8000, "words": words},
+                            ],
+                        }
+                    ]
+                },
+            }
+
+    monkeypatch.setattr("recordflow_agent.worker.StepFunASRClient.from_env", lambda: FakeASRClient())
+    monkeypatch.setattr(
+        "recordflow_agent.worker.build_authorized_download_url",
+        lambda object_name: f"https://download.example.test/{object_name}?Authorization=token",
+    )
+
+    processed = process_next_job(repo)
+    job = repo.get_job(job_id)
+    media = repo.get_media_record(media_id)
+
+    assert processed is True
+    assert job["status"] == "completed"
+    assert media["status"] == "processed"
+    assert len(media["utterances"]) == 2
+    assert media["utterances"][0]["text"].endswith("，")
+    assert media["utterances"][1]["text"].endswith("。")
+    repo.close()
+
+
 def test_worker_falls_back_to_sse_when_file_asr_fails(tmp_path, monkeypatch):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     profile = load_profile("project_meeting")
