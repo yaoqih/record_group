@@ -799,8 +799,16 @@ def estimate_task_charge(duration_seconds: float) -> TaskCharge:
 
 def pending_upload_path(task_id: str, filename: str) -> Path:
     safe_name = Path(filename).name or "recording.bin"
-    PENDING_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    return PENDING_UPLOAD_DIR / f"{task_id}-{safe_name}"
+    pending_dir = pending_upload_root()
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    return pending_dir / f"{task_id}-{safe_name}"
+
+
+def pending_upload_root() -> Path:
+    configured = os.getenv("RECORDFLOW_PENDING_UPLOAD_ROOT", "").strip()
+    if configured:
+        return Path(configured)
+    return PENDING_UPLOAD_DIR
 
 
 def local_expires_in_days_clause(backend: str, days: int) -> str:

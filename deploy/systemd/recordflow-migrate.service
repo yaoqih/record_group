@@ -1,0 +1,12 @@
+[Unit]
+Description=RecordFlow database migrations
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=recordflow
+Group=recordflow
+WorkingDirectory=/opt/recordflow
+EnvironmentFile=/etc/recordflow/recordflow.env
+ExecStart=/opt/recordflow/.venv/bin/python -m recordflow_agent.db_migrate

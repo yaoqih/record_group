@@ -1,0 +1,20 @@
+[Unit]
+Description=RecordFlow API
+Requires=recordflow-migrate.service
+Wants=network-online.target
+After=network-online.target postgresql.service recordflow-migrate.service
+
+[Service]
+Type=simple
+User=recordflow
+Group=recordflow
+WorkingDirectory=/opt/recordflow
+EnvironmentFile=/etc/recordflow/recordflow.env
+ExecStart=/opt/recordflow/.venv/bin/uvicorn recordflow_agent.api:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

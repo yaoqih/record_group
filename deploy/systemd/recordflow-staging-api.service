@@ -1,0 +1,20 @@
+[Unit]
+Description=RecordFlow staging API
+Requires=recordflow-staging-migrate.service
+Wants=network-online.target
+After=network-online.target postgresql.service recordflow-staging-migrate.service
+
+[Service]
+Type=simple
+User=recordflow-staging
+Group=recordflow-staging
+WorkingDirectory=/opt/recordflow-staging
+EnvironmentFile=/etc/recordflow/staging.env
+ExecStart=/opt/recordflow-staging/.venv/bin/uvicorn recordflow_agent.api:app --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

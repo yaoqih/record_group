@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 os.environ["RECORDFLOW_SKIP_DEFAULT_APP"] = "1"
 
@@ -166,6 +168,197 @@ def test_site_me_wechatpay_recharge_requires_configuration(tmp_path, monkeypatch
     assert response.status_code == 503
     assert "微信支付未配置" in response.json()["detail"]
     repo.close()
+
+
+def test_pending_upload_path_uses_configured_root(tmp_path, monkeypatch):
+    from recordflow_agent.asr_site import pending_upload_path
+
+    monkeypatch.setenv("RECORDFLOW_PENDING_UPLOAD_ROOT", str(tmp_path / "oss" / "staging"))
+
+    path = pending_upload_path("task_1", "../客户录音.mp3")
+
+    assert path.parent == tmp_path / "oss" / "staging"
+    assert path.name == "task_1-客户录音.mp3"
+    assert path.parent.exists()
+
+
+def test_site_me_direct_upload_init_returns_cos_post_policy(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("TENCENTCLOUD_SECRET_ID", "cos-secret-id")
+    monkeypatch.setenv("TENCENTCLOUD_SECRET_KEY", "cos-secret-key")
+    monkeypatch.setenv("RECORDFLOW_PENDING_UPLOAD_ROOT", str(tmp_path / "pending"))
+    monkeypatch.setenv(
+        "RECORDFLOW_PENDING_UPLOAD_PUBLIC_BASE_URL",
+        "https://record-1439403413.cos.ap-shanghai.myqcloud.com/staging/pending",
+    )
+    app = create_app(repo)
+    client = TestClient(app)
+    user = client.post("/site/users", json={"name": "Alice"}).json()["user"]
+    token = api_module.create_site_session_token(user["id"])
+
+    response = client.post(
+        "/site/me/tasks/direct-upload/init",
+        json={"source_name": "客户录音.mp3", "size_bytes": 1024},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    upload = body["upload"]
+    form_data = upload["form_data"]
+    policy = json_loads_base64(form_data["policy"])
+    assert upload["url"] == "https://record-1439403413.cos.ap-shanghai.myqcloud.com"
+    assert upload["object_key"].startswith("staging/pending/")
+    assert form_data["key"] == upload["object_key"]
+    assert form_data["q-ak"] == "cos-secret-id"
+    assert policy["conditions"][0] == {"bucket": "record-1439403413"}
+    assert {"key": upload["object_key"]} in policy["conditions"]
+    assert ["content-length-range", 1, api_module.SITE_TASK_MAX_AUDIO_BYTES] in policy["conditions"]
+    repo.close()
+
+
+def test_site_me_direct_upload_init_can_use_public_write_cos(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
+    monkeypatch.delenv("TENCENTCLOUD_SECRET_ID", raising=False)
+    monkeypatch.delenv("TENCENTCLOUD_SECRET_KEY", raising=False)
+    monkeypatch.setenv("RECORDFLOW_COS_DIRECT_UPLOAD_PUBLIC_WRITE", "true")
+    monkeypatch.setenv("RECORDFLOW_PENDING_UPLOAD_ROOT", str(tmp_path / "pending"))
+    monkeypatch.setenv(
+        "RECORDFLOW_PENDING_UPLOAD_PUBLIC_BASE_URL",
+        "https://record-1439403413.cos.ap-shanghai.myqcloud.com/staging/pending",
+    )
+    app = create_app(repo)
+    client = TestClient(app)
+    user = client.post("/site/users", json={"name": "Alice"}).json()["user"]
+    token = api_module.create_site_session_token(user["id"])
+
+    response = client.post(
+        "/site/me/tasks/direct-upload/init",
+        json={"source_name": "call.mp3", "size_bytes": 1024},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    upload = response.json()["upload"]
+    assert upload["auth"] == "public-write"
+    assert upload["form_data"]["key"] == upload["object_key"]
+    assert "policy" not in upload["form_data"]
+    assert "q-signature" not in upload["form_data"]
+    repo.close()
+
+
+def test_site_me_direct_upload_complete_creates_task_from_pending_mount(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    pending_root = tmp_path / "pending"
+    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("TENCENTCLOUD_SECRET_ID", "cos-secret-id")
+    monkeypatch.setenv("TENCENTCLOUD_SECRET_KEY", "cos-secret-key")
+    monkeypatch.setenv("RECORDFLOW_PENDING_UPLOAD_ROOT", str(pending_root))
+    monkeypatch.setenv(
+        "RECORDFLOW_PENDING_UPLOAD_PUBLIC_BASE_URL",
+        "https://record-1439403413.cos.ap-shanghai.myqcloud.com/staging/pending",
+    )
+    monkeypatch.setattr(api_module, "probe_media_duration_seconds", lambda file_path: 61.0)
+    app = create_app(repo)
+    client = TestClient(app)
+    user = client.post("/site/users", json={"name": "Alice"}).json()["user"]
+    token = api_module.create_site_session_token(user["id"])
+    init = client.post(
+        "/site/me/tasks/direct-upload/init",
+        json={"source_name": "客户录音.mp3", "size_bytes": 14},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    local_name = init["upload"]["object_key"].rsplit("/", 1)[-1]
+    pending_root.mkdir(parents=True, exist_ok=True)
+    (pending_root / local_name).write_bytes(b"fake-mp3-data")
+
+    complete = client.post(
+        "/site/me/tasks/direct-upload/complete",
+        json={
+            "upload_token": init["upload_token"],
+            "object_key": init["upload"]["object_key"],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert complete.status_code == 200
+    task = complete.json()["task"]
+    assert task["user_id"] == user["id"]
+    assert task["status"] == "uploaded"
+    assert task["source_name"] == "客户录音.mp3"
+    assert task["duration_seconds"] == 61.0
+    assert task["points_cost"] == 2
+    assert task["local_file_path"] == str(pending_root / local_name)
+    repo.close()
+
+
+def test_site_me_direct_upload_complete_waits_for_mount_visibility(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("TENCENTCLOUD_SECRET_ID", "cos-secret-id")
+    monkeypatch.setenv("TENCENTCLOUD_SECRET_KEY", "cos-secret-key")
+    monkeypatch.setenv("RECORDFLOW_PENDING_UPLOAD_ROOT", str(tmp_path / "pending"))
+    monkeypatch.setenv(
+        "RECORDFLOW_PENDING_UPLOAD_PUBLIC_BASE_URL",
+        "https://record-1439403413.cos.ap-shanghai.myqcloud.com/staging/pending",
+    )
+    app = create_app(repo)
+    client = TestClient(app)
+    user = client.post("/site/users", json={"name": "Alice"}).json()["user"]
+    token = api_module.create_site_session_token(user["id"])
+    init = client.post(
+        "/site/me/tasks/direct-upload/init",
+        json={"source_name": "call.mp3", "size_bytes": 14},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    response = client.post(
+        "/site/me/tasks/direct-upload/complete",
+        json={"upload_token": init["upload_token"], "object_key": init["upload"]["object_key"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 409
+    assert "visible" in response.json()["detail"]
+    repo.close()
+
+
+def test_site_me_direct_upload_complete_rejects_other_user_token(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("TENCENTCLOUD_SECRET_ID", "cos-secret-id")
+    monkeypatch.setenv("TENCENTCLOUD_SECRET_KEY", "cos-secret-key")
+    monkeypatch.setenv("RECORDFLOW_PENDING_UPLOAD_ROOT", str(tmp_path / "pending"))
+    monkeypatch.setenv(
+        "RECORDFLOW_PENDING_UPLOAD_PUBLIC_BASE_URL",
+        "https://record-1439403413.cos.ap-shanghai.myqcloud.com/staging/pending",
+    )
+    app = create_app(repo)
+    client = TestClient(app)
+    alice = client.post("/site/users", json={"name": "Alice"}).json()["user"]
+    bob = client.post("/site/users", json={"name": "Bob"}).json()["user"]
+    alice_token = api_module.create_site_session_token(alice["id"])
+    bob_token = api_module.create_site_session_token(bob["id"])
+    init = client.post(
+        "/site/me/tasks/direct-upload/init",
+        json={"source_name": "call.mp3", "size_bytes": 14},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    ).json()
+
+    response = client.post(
+        "/site/me/tasks/direct-upload/complete",
+        json={"upload_token": init["upload_token"], "object_key": init["upload"]["object_key"]},
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+
+    assert response.status_code == 403
+    repo.close()
+
+
+def json_loads_base64(value: str) -> dict:
+    return json.loads(base64.b64decode(value).decode("utf-8"))
 
 
 def test_site_me_wechatpay_confirm_queries_order_and_credits_once(tmp_path, monkeypatch):

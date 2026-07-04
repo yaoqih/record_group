@@ -1,0 +1,19 @@
+[Unit]
+Description=RecordFlow worker
+Requires=recordflow-migrate.service
+Wants=network-online.target
+After=network-online.target postgresql.service recordflow-migrate.service
+
+[Service]
+Type=simple
+User=recordflow
+Group=recordflow
+WorkingDirectory=/opt/recordflow
+EnvironmentFile=/etc/recordflow/recordflow.env
+ExecStart=/opt/recordflow/.venv/bin/python -m recordflow_agent.worker --poll-seconds 1
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

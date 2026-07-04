@@ -2,8 +2,11 @@ from recordflow_agent import media_storage
 from recordflow_agent.media_storage import (
     B2UploadError,
     B2Settings,
+    FileStorageSettings,
     build_authorized_download_url,
+    delete_media_from_b2,
     request_json,
+    upload_media_to_filesystem,
     upload_media_to_b2,
 )
 
@@ -106,6 +109,49 @@ def test_build_authorized_download_url_uses_b2_download_authorization(monkeypatc
 
     assert url.startswith("https://f005.backblazeb2.com/file/record-flow/uploads/meeting%20compressed.wav")
     assert "Authorization=download-token" in url
+
+
+def test_upload_media_to_filesystem_writes_to_mounted_storage(tmp_path):
+    settings = FileStorageSettings(
+        root=tmp_path / "record",
+        public_base_url="https://oss.example.com/record",
+    )
+
+    result = upload_media_to_filesystem(
+        data=b"audio-bytes",
+        source_name="meeting compressed.webm",
+        content_type="audio/webm",
+        settings=settings,
+    )
+
+    stored_path = settings.root / result["object_name"]
+    assert result["bucket"] == "filesystem"
+    assert result["url"].startswith("https://oss.example.com/record/uploads/")
+    assert stored_path.read_bytes() == b"audio-bytes"
+
+
+def test_configured_filesystem_storage_builds_public_download_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECORDFLOW_MEDIA_STORAGE_BACKEND", "filesystem")
+    monkeypatch.setenv("RECORDFLOW_FS_STORAGE_ROOT", str(tmp_path / "record"))
+    monkeypatch.setenv("RECORDFLOW_FS_PUBLIC_BASE_URL", "https://oss.example.com/record")
+
+    url = build_authorized_download_url("uploads/meeting compressed.ogg")
+
+    assert url == "https://oss.example.com/record/uploads/meeting%20compressed.ogg"
+
+
+def test_configured_filesystem_storage_deletes_local_object(tmp_path, monkeypatch):
+    root = tmp_path / "record"
+    target = root / "uploads" / "meeting.ogg"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"audio")
+    monkeypatch.setenv("RECORDFLOW_MEDIA_STORAGE_BACKEND", "filesystem")
+    monkeypatch.setenv("RECORDFLOW_FS_STORAGE_ROOT", str(root))
+    monkeypatch.setenv("RECORDFLOW_FS_PUBLIC_BASE_URL", "https://oss.example.com/record")
+
+    delete_media_from_b2("uploads/meeting.ogg")
+
+    assert not target.exists()
 
 
 def test_request_json_retries_transient_url_errors(monkeypatch):

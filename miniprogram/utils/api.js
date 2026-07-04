@@ -72,35 +72,56 @@ function loginWithWechat(nickname) {
   })
 }
 
-function uploadTask(filePath, name) {
-  const token = getToken()
+function uploadTask(filePath, name, sizeBytes) {
+  const sourceName = name || 'recording.mp3'
+  return request('/site/me/tasks/direct-upload/init', {
+    method: 'POST',
+    data: {
+      source_name: sourceName,
+      size_bytes: sizeBytes || undefined
+    }
+  }).then((data) => uploadFileToCOS(filePath, sourceName, data))
+}
+
+function uploadFileToCOS(filePath, sourceName, initData) {
+  const upload = initData.upload || {}
+  const formData = upload.form_data || {}
   return new Promise((resolve, reject) => {
     wx.uploadFile({
-      url: `${API_BASE}/site/me/tasks`,
+      url: upload.url,
       filePath,
-      name: 'file',
-      fileName: name || 'recording.mp3',
-      formData: {
-        source_name: name || 'recording.mp3'
-      },
-      header: token ? { Authorization: `Bearer ${token}` } : {},
+      name: upload.file_field || 'file',
+      fileName: sourceName,
+      formData,
       success: (res) => {
-        let data = {}
-        try {
-          data = JSON.parse(res.data || '{}')
-        } catch (error) {
-          reject(new Error('上传成功但返回内容不是 JSON'))
-          return
-        }
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(data)
+          request('/site/me/tasks/direct-upload/complete', {
+            method: 'POST',
+            data: {
+              upload_token: initData.upload_token,
+              object_key: upload.object_key
+            }
+          })
+            .then(resolve)
+            .catch(reject)
           return
         }
-        reject(new Error(resolveErrorMessage(data, `上传失败：HTTP ${res.statusCode}`)))
+        reject(new Error(resolveCOSUploadError(res)))
       },
       fail: (err) => reject(new Error(err.errMsg || '上传失败'))
     })
   })
+}
+
+function resolveCOSUploadError(res) {
+  const text = res && res.data ? String(res.data) : ''
+  const message = extractXMLMessage(text)
+  return message || `上传到临时存储失败：HTTP ${res.statusCode}`
+}
+
+function extractXMLMessage(text) {
+  const matched = text.match(/<Message>([^<]+)<\/Message>/)
+  return matched ? matched[1] : ''
 }
 
 function resolveErrorMessage(data, fallback) {

@@ -4,14 +4,18 @@ import base64
 import hashlib
 import hmac
 import json
+import mimetypes
 import os
+import re
 import secrets
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.parse import urlencode
+from urllib.parse import urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
@@ -28,6 +32,7 @@ from recordflow_agent.asr_site import (
     build_text_export,
     estimate_task_charge,
     pending_upload_path,
+    pending_upload_root,
     remove_local_file_if_exists,
 )
 from recordflow_agent.cli import build_digest_renderer, build_extractor
@@ -164,6 +169,33 @@ class StartTaskRequest(BaseModel):
 
 class RenameTaskRequest(BaseModel):
     title: str
+
+
+class DirectUploadInitRequest(BaseModel):
+    source_name: str = "recording.mp3"
+    content_type: str | None = None
+    size_bytes: int | None = None
+
+
+class DirectUploadCompleteRequest(BaseModel):
+    upload_token: str
+    object_key: str | None = None
+
+
+@dataclass(frozen=True)
+class COSDirectUploadSettings:
+    secret_id: str
+    secret_key: str
+    bucket: str
+    region: str
+    upload_url: str
+    key_prefix: str
+    public_base_url: str
+    public_write: bool = False
+
+
+class COSDirectUploadConfigurationError(RuntimeError):
+    pass
 
 
 def create_app(repo: object | None = None) -> FastAPI:
@@ -590,6 +622,25 @@ def create_app(repo: object | None = None) -> FastAPI:
             store.close()
         return await submit_site_task_for_user(user["id"], file, source_name)
 
+    @app.post("/site/me/tasks/direct-upload/init")
+    def init_site_me_direct_upload(request: Request, body: DirectUploadInitRequest) -> dict:
+        store = open_site_store(app.state.repo)
+        try:
+            user = require_site_session_user(request, store)
+            task_id = store.next_id("task")
+        finally:
+            store.close()
+        return init_site_direct_upload_for_user(user["id"], task_id, body)
+
+    @app.post("/site/me/tasks/direct-upload/complete")
+    def complete_site_me_direct_upload(request: Request, body: DirectUploadCompleteRequest) -> dict:
+        store = open_site_store(app.state.repo)
+        try:
+            user = require_site_session_user(request, store)
+        finally:
+            store.close()
+        return complete_site_direct_upload_for_user(user["id"], body)
+
     @app.get("/site/me/tasks/{task_id}")
     def get_site_me_task(request: Request, task_id: str) -> dict:
         store = open_site_store(app.state.repo)
@@ -854,6 +905,144 @@ def create_app(repo: object | None = None) -> FastAPI:
                 source_name=filename,
                 content_type=file.content_type or "application/octet-stream",
                 original_size_bytes=len(data),
+                duration_seconds=duration_seconds,
+                points_cost=charge.points,
+                charge_basis=charge.basis,
+                agreement_version=AGREEMENT_VERSION,
+                local_file_path=str(local_path),
+            )
+            if task["id"] != task_id:
+                raise HTTPException(status_code=500, detail="Task creation id mismatch.")
+            return {"task": task}
+        finally:
+            store.close()
+
+    def init_site_direct_upload_for_user(user_id: str, task_id: str, body: DirectUploadInitRequest) -> dict:
+        source_name = Path((body.source_name or "").strip() or "recording.mp3").name
+        content_type = preferred_upload_content_type(source_name, body.content_type)
+        if not is_supported_site_task_audio(source_name, content_type):
+            raise HTTPException(
+                status_code=400,
+                detail="仅支持提交音频文件，支持 mp3、m4a、wav、ogg、webm、flac 等格式。",
+            )
+        if body.size_bytes is not None:
+            size_bytes = int(body.size_bytes)
+            if size_bytes <= 0:
+                raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+            if size_bytes > SITE_TASK_MAX_AUDIO_BYTES:
+                raise HTTPException(status_code=413, detail="音频文件不能超过 200MB。")
+        try:
+            settings = cos_direct_upload_settings()
+        except COSDirectUploadConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        storage_filename = direct_upload_storage_filename(source_name, content_type)
+        object_key = build_direct_upload_object_key(task_id, storage_filename, settings)
+        now = int(time.time())
+        ttl_seconds = direct_upload_ttl_seconds()
+        expires_at = now + ttl_seconds
+        form_data = {
+            "key": object_key,
+            "success_action_status": "200",
+            "Content-Type": content_type,
+        }
+        if not settings.public_write:
+            policy, signature = build_cos_post_upload_policy(
+                settings=settings,
+                object_key=object_key,
+                content_type=content_type,
+                start_at=now,
+                expires_at=expires_at,
+            )
+            form_data.update(
+                {
+                    "policy": policy,
+                    "q-sign-algorithm": "sha1",
+                    "q-ak": settings.secret_id,
+                    "q-key-time": f"{now};{expires_at}",
+                    "q-signature": signature,
+                }
+            )
+        upload_token = create_direct_upload_token(
+            {
+                "user_id": user_id,
+                "task_id": task_id,
+                "source_name": source_name,
+                "storage_filename": storage_filename,
+                "content_type": content_type,
+                "key": object_key,
+                "exp": expires_at,
+            }
+        )
+        return {
+            "task_id": task_id,
+            "upload_token": upload_token,
+            "upload": {
+                "method": "POST",
+                "url": settings.upload_url,
+                "file_field": "file",
+                "form_data": form_data,
+                "object_key": object_key,
+                "object_url": direct_upload_object_url(settings, object_key),
+                "expires_at": expires_at,
+                "max_size_bytes": SITE_TASK_MAX_AUDIO_BYTES,
+                "auth": "public-write" if settings.public_write else "signed-post",
+            },
+        }
+
+    def complete_site_direct_upload_for_user(user_id: str, body: DirectUploadCompleteRequest) -> dict:
+        payload = decode_direct_upload_token(body.upload_token)
+        if payload["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Upload token does not match current user.")
+        try:
+            settings = cos_direct_upload_settings()
+        except COSDirectUploadConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        task_id = payload["task_id"]
+        storage_filename = payload["storage_filename"]
+        expected_key = build_direct_upload_object_key(task_id, storage_filename, settings)
+        if payload["key"] != expected_key:
+            raise HTTPException(status_code=400, detail="Upload token does not match current storage path.")
+        if body.object_key is not None and body.object_key != expected_key:
+            raise HTTPException(status_code=400, detail="Completed object key does not match upload token.")
+        workspace_id = get_or_create_site_workspace(app.state.repo)
+        store = open_site_store(app.state.repo)
+        try:
+            try:
+                store.get_user(user_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="User not found.") from exc
+            try:
+                existing = store.get_task(task_id)
+            except KeyError:
+                existing = None
+            if existing is not None:
+                if existing["user_id"] != user_id:
+                    raise HTTPException(status_code=404, detail="Task not found.")
+                return {"task": existing}
+            local_path = pending_upload_path(task_id, storage_filename)
+            if not local_path.exists() or not local_path.is_file():
+                raise HTTPException(status_code=409, detail="Uploaded object is not visible on the server yet.")
+            original_size_bytes = local_path.stat().st_size
+            if original_size_bytes <= 0:
+                remove_local_file_if_exists(str(local_path))
+                raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+            if original_size_bytes > SITE_TASK_MAX_AUDIO_BYTES:
+                remove_local_file_if_exists(str(local_path))
+                raise HTTPException(status_code=413, detail="音频文件不能超过 200MB。")
+            try:
+                duration_seconds = probe_media_duration_seconds(local_path)
+            except FileNotFoundError as exc:
+                remove_local_file_if_exists(str(local_path))
+                raise HTTPException(status_code=503, detail="ffprobe is not installed on the server.") from exc
+            charge = estimate_task_charge(duration_seconds)
+            task = store.create_pending_task(
+                task_id=task_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                title=payload["source_name"],
+                source_name=payload["source_name"],
+                content_type=payload["content_type"],
+                original_size_bytes=original_size_bytes,
                 duration_seconds=duration_seconds,
                 points_cost=charge.points,
                 charge_basis=charge.basis,
@@ -1409,6 +1598,32 @@ def create_site_session_token(user_id: str) -> str:
     return f"rf1.{body}.{signature}"
 
 
+def create_direct_upload_token(payload: dict) -> str:
+    body = encode_token_part(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signature = sign_site_session_body(body)
+    return f"rfdu1.{body}.{signature}"
+
+
+def decode_direct_upload_token(token: str) -> dict:
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != "rfdu1":
+        raise HTTPException(status_code=401, detail="Invalid direct upload token.")
+    _, body, signature = parts
+    expected = sign_site_session_body(body)
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=401, detail="Invalid direct upload token.")
+    try:
+        payload = json.loads(decode_token_part(body).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid direct upload token.") from exc
+    if int(payload.get("exp") or 0) < int(time.time()):
+        raise HTTPException(status_code=401, detail="Direct upload token expired.")
+    for key in ["user_id", "task_id", "source_name", "storage_filename", "content_type", "key"]:
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            raise HTTPException(status_code=401, detail="Invalid direct upload token.")
+    return payload
+
+
 def decode_site_session_token(token: str) -> dict:
     parts = token.split(".")
     if len(parts) != 3 or parts[0] != "rf1":
@@ -1442,6 +1657,195 @@ def is_supported_site_task_audio(filename: str, content_type: str | None) -> boo
     suffix = Path(filename.lower()).suffix
     mime_type = (content_type or "").split(";", 1)[0].strip().lower()
     return mime_type in SITE_TASK_AUDIO_MIME_TYPES or suffix in SITE_TASK_AUDIO_EXTENSIONS
+
+
+def direct_upload_ttl_seconds() -> int:
+    return max(60, int(os.getenv("RECORDFLOW_DIRECT_UPLOAD_TTL_SECONDS", "900") or "900"))
+
+
+def preferred_upload_content_type(filename: str, content_type: str | None) -> str:
+    mime_type = (content_type or "").split(";", 1)[0].strip().lower()
+    if mime_type and mime_type != "application/octet-stream":
+        return mime_type
+    guessed, _ = mimetypes.guess_type(filename)
+    return guessed or "application/octet-stream"
+
+
+def direct_upload_storage_filename(source_name: str, content_type: str | None) -> str:
+    name = Path(source_name or "recording").name or "recording"
+    suffix = Path(name).suffix.lower()
+    if not suffix:
+        suffix = audio_extension_for_content_type(content_type)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(name).stem).strip(".-")
+    if not stem:
+        stem = "recording"
+    stem = stem[:64].strip(".-") or "recording"
+    digest = hashlib.sha1(f"{name}:{secrets.token_hex(8)}".encode("utf-8")).hexdigest()[:12]
+    return f"{stem}-{digest}{suffix}"
+
+
+def audio_extension_for_content_type(content_type: str | None) -> str:
+    mime_type = (content_type or "").split(";", 1)[0].strip().lower()
+    return {
+        "audio/aac": ".aac",
+        "audio/aiff": ".aiff",
+        "audio/flac": ".flac",
+        "audio/mp4": ".m4a",
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/ogg": ".ogg",
+        "audio/opus": ".opus",
+        "audio/pcm": ".pcm",
+        "audio/wav": ".wav",
+        "audio/wave": ".wav",
+        "audio/webm": ".webm",
+        "audio/x-aiff": ".aiff",
+        "audio/x-m4a": ".m4a",
+        "audio/x-wav": ".wav",
+    }.get(mime_type, ".bin")
+
+
+def cos_direct_upload_settings() -> COSDirectUploadSettings:
+    public_base_url = os.getenv("RECORDFLOW_PENDING_UPLOAD_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    parsed_public_base = urlparse(public_base_url) if public_base_url else None
+    derived_bucket, derived_region = derive_cos_bucket_region(parsed_public_base)
+    public_write = env_bool("RECORDFLOW_COS_DIRECT_UPLOAD_PUBLIC_WRITE", default=False)
+    secret_id = (
+        os.getenv("RECORDFLOW_COS_SECRET_ID")
+        or os.getenv("TENCENTCLOUD_SECRET_ID")
+        or os.getenv("COS_SECRET_ID")
+        or ""
+    ).strip()
+    secret_key = (
+        os.getenv("RECORDFLOW_COS_SECRET_KEY")
+        or os.getenv("TENCENTCLOUD_SECRET_KEY")
+        or os.getenv("COS_SECRET_KEY")
+        or ""
+    ).strip()
+    bucket = (os.getenv("RECORDFLOW_COS_BUCKET") or derived_bucket or "").strip()
+    region = (os.getenv("RECORDFLOW_COS_REGION") or derived_region or "").strip()
+    key_prefix = (
+        os.getenv("RECORDFLOW_COS_DIRECT_UPLOAD_PREFIX", "").strip().strip("/")
+        or derive_cos_key_prefix(parsed_public_base)
+        or derive_cos_key_prefix_from_pending_root()
+    )
+    upload_url = os.getenv("RECORDFLOW_COS_UPLOAD_URL", "").strip().rstrip("/")
+    missing = [
+        name
+        for name, value in [
+            ("RECORDFLOW_COS_BUCKET", bucket),
+            ("RECORDFLOW_COS_REGION", region),
+        ]
+        if not value
+    ]
+    if not public_write:
+        missing.extend(
+            [
+                name
+                for name, value in [
+                    ("TENCENTCLOUD_SECRET_ID", secret_id),
+                    ("TENCENTCLOUD_SECRET_KEY", secret_key),
+                ]
+                if not value
+            ]
+        )
+    if missing:
+        raise COSDirectUploadConfigurationError(
+            "COS direct upload is not configured. Missing: " + ", ".join(missing)
+        )
+    if not upload_url:
+        upload_url = f"https://{bucket}.cos.{region}.myqcloud.com"
+    if not public_base_url:
+        public_base_url = upload_url
+    return COSDirectUploadSettings(
+        secret_id=secret_id,
+        secret_key=secret_key,
+        bucket=bucket,
+        region=region,
+        upload_url=upload_url,
+        key_prefix=key_prefix,
+        public_base_url=public_base_url,
+        public_write=public_write,
+    )
+
+
+def env_bool(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def derive_cos_bucket_region(parsed_public_base) -> tuple[str, str]:
+    if not parsed_public_base or not parsed_public_base.netloc:
+        return "", ""
+    host_parts = parsed_public_base.netloc.split(".")
+    if len(host_parts) >= 4 and host_parts[1] in {"cos", "cos-website"}:
+        return host_parts[0], host_parts[2]
+    return "", ""
+
+
+def derive_cos_key_prefix(parsed_public_base) -> str:
+    if not parsed_public_base:
+        return ""
+    return parsed_public_base.path.strip("/")
+
+
+def derive_cos_key_prefix_from_pending_root() -> str:
+    root = pending_upload_root()
+    try:
+        return str(root.resolve().relative_to(Path("/record").resolve())).replace(os.sep, "/").strip("/")
+    except ValueError:
+        return "pending"
+
+
+def build_direct_upload_object_key(
+    task_id: str,
+    storage_filename: str,
+    settings: COSDirectUploadSettings,
+) -> str:
+    object_name = f"{task_id}-{Path(storage_filename).name}"
+    return f"{settings.key_prefix}/{object_name}" if settings.key_prefix else object_name
+
+
+def direct_upload_object_url(settings: COSDirectUploadSettings, object_key: str) -> str:
+    prefix = settings.key_prefix.strip("/")
+    object_name = object_key
+    if prefix and object_key.startswith(f"{prefix}/"):
+        object_name = object_key[len(prefix) + 1 :]
+    if settings.public_base_url:
+        return f"{settings.public_base_url.rstrip('/')}/{quote(object_name, safe='/')}"
+    return f"{settings.upload_url.rstrip('/')}/{quote(object_key, safe='/')}"
+
+
+def build_cos_post_upload_policy(
+    *,
+    settings: COSDirectUploadSettings,
+    object_key: str,
+    content_type: str,
+    start_at: int,
+    expires_at: int,
+) -> tuple[str, str]:
+    key_time = f"{start_at};{expires_at}"
+    policy_document = {
+        "expiration": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(expires_at)),
+        "conditions": [
+            {"bucket": settings.bucket},
+            {"key": object_key},
+            {"success_action_status": "200"},
+            {"Content-Type": content_type},
+            {"q-sign-algorithm": "sha1"},
+            {"q-ak": settings.secret_id},
+            {"q-sign-time": key_time},
+            ["content-length-range", 1, SITE_TASK_MAX_AUDIO_BYTES],
+        ],
+    }
+    policy_text = json.dumps(policy_document, separators=(",", ":"), ensure_ascii=False)
+    policy = base64.b64encode(policy_text.encode("utf-8")).decode("ascii")
+    sign_key = hmac.new(settings.secret_key.encode("utf-8"), key_time.encode("utf-8"), hashlib.sha1).hexdigest()
+    string_to_sign = hashlib.sha1(policy_text.encode("utf-8")).hexdigest()
+    signature = hmac.new(sign_key.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1).hexdigest()
+    return policy, signature
 
 
 def site_session_token_from_request(request: Request) -> str:

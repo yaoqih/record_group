@@ -62,13 +62,13 @@ Page({
       extension: AUDIO_EXTENSIONS,
       success: (res) => {
         const file = res.tempFiles[0]
-        if (file && this.validateAudioFile(file)) this.upload(file.path, file.name)
+        if (file && this.validateAudioFile(file)) this.upload(file.path, file.name, file.size)
       },
       fail: (error) => this.handleChooseFailure(error)
     })
   },
 
-  async upload(filePath, name) {
+  async upload(filePath, name, sizeBytes) {
     if (this.data.uploading) return
     if (!api.getToken()) {
       this.setData({ error: '请先登录' })
@@ -76,7 +76,7 @@ Page({
     }
     this.setData({ uploading: true, selectedName: name, error: '' })
     try {
-      const data = await api.uploadTask(filePath, name)
+      const data = await api.uploadTask(filePath, name, sizeBytes)
       const task = decorateTask(data.task)
       this.setData({ latestTask: task })
       showToast(this, 'success', '上传成功')

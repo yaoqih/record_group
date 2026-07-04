@@ -9,6 +9,7 @@ import re
 import ssl
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -115,6 +116,23 @@ class B2Settings:
         )
 
 
+@dataclass(frozen=True)
+class FileStorageSettings:
+    root: Path
+    public_base_url: str
+
+    @classmethod
+    def from_env(cls) -> "FileStorageSettings":
+        root = Path(os.getenv("RECORDFLOW_FS_STORAGE_ROOT", "").strip() or "/record")
+        public_base_url = os.getenv("RECORDFLOW_FS_PUBLIC_BASE_URL", "").strip()
+        if not public_base_url:
+            raise B2ConfigurationError(
+                "Filesystem media storage is not configured. Missing: "
+                "RECORDFLOW_FS_PUBLIC_BASE_URL"
+            )
+        return cls(root=root, public_base_url=public_base_url.rstrip("/"))
+
+
 class B2ConfigurationError(RuntimeError):
     pass
 
@@ -157,6 +175,13 @@ def build_media_object_name(source_name: str, content_type: str | None) -> str:
     return f"uploads/{date_path}/{timestamp}-{digest}-{safe_name}"
 
 
+def configured_storage_backend() -> str:
+    backend = os.getenv("RECORDFLOW_MEDIA_STORAGE_BACKEND", "b2").strip().lower()
+    if backend in {"filesystem", "fs", "local", "mounted", "oss"}:
+        return "filesystem"
+    return "b2"
+
+
 def sanitize_filename(filename: str) -> str:
     name = PurePosixPath(filename or "recording").name.strip()
     if not name:
@@ -193,6 +218,9 @@ def upload_media_to_b2(
     content_type: str | None,
     settings: B2Settings | None = None,
 ) -> dict[str, Any]:
+    if settings is None and configured_storage_backend() == "filesystem":
+        return upload_media_to_filesystem(data=data, source_name=source_name, content_type=content_type)
+
     settings = settings or B2Settings.from_env()
     object_name = build_media_object_name(source_name, content_type)
     upload_content_type = guess_upload_content_type(object_name, content_type)
@@ -232,6 +260,43 @@ def upload_media_to_b2(
         "url": cdn_url,
         "public_url": public_url,
     }
+
+
+def upload_media_to_filesystem(
+    data: bytes,
+    source_name: str,
+    content_type: str | None,
+    settings: FileStorageSettings | None = None,
+) -> dict[str, Any]:
+    settings = settings or FileStorageSettings.from_env()
+    object_name = build_media_object_name(source_name, content_type)
+    target_path = safe_storage_path(settings.root, object_name)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(data)
+    upload_content_type = guess_upload_content_type(object_name, content_type)
+    sha1 = hashlib.sha1(data).hexdigest()
+    public_url = f"{settings.public_base_url}/{quote(object_name, safe='/')}"
+    return {
+        "bucket": "filesystem",
+        "object_name": object_name,
+        "file_id": None,
+        "content_type": upload_content_type,
+        "size_bytes": len(data),
+        "sha1": sha1,
+        "url": public_url,
+        "public_url": public_url,
+    }
+
+
+def safe_storage_path(root: Path, object_name: str) -> Path:
+    root = root.resolve()
+    relative = PurePosixPath(object_name)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise B2UploadError("Invalid media object name.")
+    target = (root / Path(*relative.parts)).resolve()
+    if target != root and root not in target.parents:
+        raise B2UploadError("Invalid media object path.")
+    return target
 
 
 def authorize_account(settings: B2Settings) -> dict[str, Any]:
@@ -295,6 +360,10 @@ def build_authorized_download_url(
     settings: B2Settings | None = None,
     valid_duration_seconds: int = 3600,
 ) -> str:
+    if settings is None and configured_storage_backend() == "filesystem":
+        file_settings = FileStorageSettings.from_env()
+        return f"{file_settings.public_base_url}/{quote(object_name, safe='/')}"
+
     settings = settings or B2Settings.from_env()
     auth = authorize_account(settings)
     bucket_id = settings.bucket_id or find_bucket_id(auth, settings.bucket_name)
@@ -312,6 +381,14 @@ def delete_media_from_b2(
     object_name: str,
     settings: B2Settings | None = None,
 ) -> None:
+    if settings is None and configured_storage_backend() == "filesystem":
+        target_path = safe_storage_path(FileStorageSettings.from_env().root, object_name)
+        try:
+            target_path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
     settings = settings or B2Settings.from_env()
     auth = authorize_account(settings)
     file_info = find_file_version_by_name(auth, settings.bucket_name, object_name)
