@@ -183,3 +183,15 @@ For MVP deployment on Neon, set `DATABASE_URL` in the hosting platform secret
 settings. Do not put the real connection string in source files or docs.
 
 See `docs/plans/2026-05-04-recordflow-backend-mvp-runbook.md` for API examples and deployment notes.
+
+ # 生产 API
+journalctl -u recordflow-api -f
+
+# 生产 worker
+journalctl -u recordflow-worker -f
+
+# 测试 API
+journalctl -u recordflow-staging-api -f
+
+# 测试 worker
+journalctl -u recordflow-staging-worker -f
