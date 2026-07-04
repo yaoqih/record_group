@@ -70,15 +70,18 @@ RECORDFLOW_COS_DIRECT_UPLOAD_PREFIX=production/pending
 ```
 
 For Mini Program direct upload to COS, the backend exposes a short-lived init
-API that returns the upload form and a RecordFlow upload token. If the temporary
-COS bucket is intentionally public-writable, set:
+API that returns either a public form or a signed POST Object form, plus a
+RecordFlow upload token. Add the COS endpoint to the Mini Program
+`uploadFile` domain allowlist, for example
+`https://record-1439403413.cos.ap-shanghai.myqcloud.com`. If the temporary COS
+bucket is intentionally public-writable, set:
 
 ```env
 RECORDFLOW_COS_DIRECT_UPLOAD_PUBLIC_WRITE=true
 ```
 
-In that mode, COS accepts the upload directly and the backend still requires
-the RecordFlow upload token before creating a task from the mounted
+In all modes, COS accepts the upload directly and the backend still requires the
+RecordFlow upload token before creating a task from the mounted
 `/record/.../pending` file. If the bucket is private, keep public write disabled
 and configure a COS key that has `PostObject` permission:
 

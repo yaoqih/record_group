@@ -19,6 +19,14 @@ Page({
     this.loadMe()
   },
 
+  onHide() {
+    this.stopLatestTaskPolling()
+  },
+
+  onUnload() {
+    this.stopLatestTaskPolling()
+  },
+
   onNicknameInput(event) {
     this.setData({ nickname: inputValue(event) })
   },
@@ -47,10 +55,30 @@ Page({
       const data = await api.request('/site/me')
       this.setData({ user: data.user })
       getApp().globalData.user = data.user
+      this.refreshLatestTask({ silent: true })
     } catch (error) {
       api.clearSession()
       this.setData({ user: null, latestTask: null, selectedName: '' })
       getApp().globalData.user = null
+      this.stopLatestTaskPolling()
+    }
+  },
+
+  async refreshLatestTask(options = {}) {
+    if (!api.getToken() || this.latestTaskLoading) return
+    this.latestTaskLoading = true
+    try {
+      const data = await api.request('/site/me/tasks')
+      const tasks = data.tasks || []
+      const currentId = this.data.latestTask && this.data.latestTask.id
+      const latest = (currentId && tasks.find((task) => task.id === currentId)) || tasks[0] || null
+      const latestTask = latest ? decorateTask(latest) : null
+      this.setData({ latestTask })
+      this.startLatestTaskPollingIfNeeded(latestTask)
+    } catch (error) {
+      if (!options.silent) this.setData({ error: error.message })
+    } finally {
+      this.latestTaskLoading = false
     }
   },
 
@@ -79,6 +107,7 @@ Page({
       const data = await api.uploadTask(filePath, name, sizeBytes)
       const task = decorateTask(data.task)
       this.setData({ latestTask: task })
+      this.startLatestTaskPollingIfNeeded(task)
       showToast(this, 'success', '上传成功')
     } catch (error) {
       this.setData({ error: error.message })
@@ -112,6 +141,23 @@ Page({
       return false
     }
     return true
+  },
+
+  startLatestTaskPollingIfNeeded(task) {
+    if (!task || !isProcessingStatus(task.status)) {
+      this.stopLatestTaskPolling()
+      return
+    }
+    if (this.latestTaskPollTimer) return
+    this.latestTaskPollTimer = setInterval(() => {
+      this.refreshLatestTask({ silent: true })
+    }, 5000)
+  },
+
+  stopLatestTaskPolling() {
+    if (!this.latestTaskPollTimer) return
+    clearInterval(this.latestTaskPollTimer)
+    this.latestTaskPollTimer = null
   }
 })
 
@@ -121,8 +167,13 @@ function decorateTask(task) {
     displayTitle: taskDisplayTitle(task),
     statusLabel: statusLabel(task.status),
     statusTheme: statusTheme(task.status),
-    summary: taskText(task)
+    summary: taskText(task),
+    actionNote: task.status === 'uploaded' ? '点按查看详情和确认转写。' : '点按查看详情和转写结果。'
   }
+}
+
+function isProcessingStatus(status) {
+  return ['queued', 'starting', 'transcribing'].includes(status)
 }
 
 function inputValue(event) {

@@ -85,6 +85,42 @@ function uploadTask(filePath, name, sizeBytes) {
 
 function uploadFileToCOS(filePath, sourceName, initData) {
   const upload = initData.upload || {}
+  if (upload.method === 'PUT') {
+    return putFileToCOS(filePath, upload).then(() => completeDirectUpload(initData, upload))
+  }
+  return postFileToCOS(filePath, sourceName, initData, upload)
+}
+
+function putFileToCOS(filePath, upload) {
+  return readLocalFile(filePath).then((data) => new Promise((resolve, reject) => {
+    wx.request({
+      url: upload.url,
+      method: 'PUT',
+      data,
+      header: upload.headers || {},
+      success: (res) => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(res)
+          return
+        }
+        reject(new Error(resolveCOSUploadError(res)))
+      },
+      fail: (err) => reject(new Error(err.errMsg || '上传失败'))
+    })
+  }))
+}
+
+function readLocalFile(filePath) {
+  return new Promise((resolve, reject) => {
+    wx.getFileSystemManager().readFile({
+      filePath,
+      success: (res) => resolve(res.data),
+      fail: (err) => reject(new Error(err.errMsg || '读取文件失败'))
+    })
+  })
+}
+
+function postFileToCOS(filePath, sourceName, initData, upload) {
   const formData = upload.form_data || {}
   return new Promise((resolve, reject) => {
     wx.uploadFile({
@@ -95,13 +131,7 @@ function uploadFileToCOS(filePath, sourceName, initData) {
       formData,
       success: (res) => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          request('/site/me/tasks/direct-upload/complete', {
-            method: 'POST',
-            data: {
-              upload_token: initData.upload_token,
-              object_key: upload.object_key
-            }
-          })
+          completeDirectUpload(initData, upload)
             .then(resolve)
             .catch(reject)
           return
@@ -110,6 +140,16 @@ function uploadFileToCOS(filePath, sourceName, initData) {
       },
       fail: (err) => reject(new Error(err.errMsg || '上传失败'))
     })
+  })
+}
+
+function completeDirectUpload(initData, upload) {
+  return request('/site/me/tasks/direct-upload/complete', {
+    method: 'POST',
+    data: {
+      upload_token: initData.upload_token,
+      object_key: upload.object_key
+    }
   })
 }
 

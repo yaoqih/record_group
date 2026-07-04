@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -15,6 +16,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.parse import urlencode
+from urllib.parse import quote as url_quote
 from urllib.parse import urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
@@ -84,6 +86,8 @@ SITE_TASK_AUDIO_EXTENSIONS = {
     ".wav",
     ".webm",
 }
+WECHATPAY_UNAVAILABLE_DETAIL = "微信支付暂不可用，请稍后再试。"
+LOGGER = logging.getLogger(__name__)
 
 
 class CreateWorkspaceRequest(BaseModel):
@@ -940,13 +944,16 @@ def create_app(repo: object | None = None) -> FastAPI:
         now = int(time.time())
         ttl_seconds = direct_upload_ttl_seconds()
         expires_at = now + ttl_seconds
+        upload_method = "POST"
+        upload_url = settings.upload_url
+        upload_headers = {}
         form_data = {
             "key": object_key,
             "success_action_status": "200",
             "Content-Type": content_type,
         }
         if not settings.public_write:
-            policy, signature = build_cos_post_upload_policy(
+            key_time, policy, signature = build_cos_post_upload_policy(
                 settings=settings,
                 object_key=object_key,
                 content_type=content_type,
@@ -958,7 +965,7 @@ def create_app(repo: object | None = None) -> FastAPI:
                     "policy": policy,
                     "q-sign-algorithm": "sha1",
                     "q-ak": settings.secret_id,
-                    "q-key-time": f"{now};{expires_at}",
+                    "q-key-time": key_time,
                     "q-signature": signature,
                 }
             )
@@ -977,8 +984,9 @@ def create_app(repo: object | None = None) -> FastAPI:
             "task_id": task_id,
             "upload_token": upload_token,
             "upload": {
-                "method": "POST",
-                "url": settings.upload_url,
+                "method": upload_method,
+                "url": upload_url,
+                "headers": upload_headers,
                 "file_field": "file",
                 "form_data": form_data,
                 "object_key": object_key,
@@ -1403,15 +1411,8 @@ def create_wechatpay_jsapi_recharge(
     private_key_path = os.getenv("WECHAT_PAY_MCH_PRIVATE_KEY_PATH", "").strip()
     notify_url = os.getenv("WECHAT_PAY_NOTIFY_URL", "").strip() or "https://example.com/site/payments/wechat/notify"
     if not all([appid, mchid, serial_no, private_key_path]):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "微信支付未配置：需要 WECHAT_PAY_MCH_ID、WECHAT_PAY_MCH_SERIAL_NO、"
-                "WECHAT_PAY_MCH_PRIVATE_KEY_PATH。"
-            ),
-        )
-    if not Path(private_key_path).exists():
-        raise HTTPException(status_code=503, detail="WECHAT_PAY_MCH_PRIVATE_KEY_PATH does not exist.")
+        raise_wechatpay_unavailable("missing jsapi recharge configuration")
+    private_key_path = require_readable_wechatpay_private_key(private_key_path)
 
     out_trade_no = f"rf_{int(time.time())}_{secrets.token_hex(6)}"
     body = {
@@ -1434,7 +1435,7 @@ def create_wechatpay_jsapi_recharge(
     )
     prepay_id = response.get("prepay_id")
     if not prepay_id:
-        raise HTTPException(status_code=502, detail="微信支付未返回 prepay_id。")
+        raise_wechatpay_unavailable("prepay_id missing from WeChat Pay response")
 
     timestamp = str(int(time.time()))
     nonce_str = secrets.token_hex(16)
@@ -1458,10 +1459,8 @@ def query_wechatpay_order(out_trade_no: str) -> dict:
     serial_no = os.getenv("WECHAT_PAY_MCH_SERIAL_NO", "").strip()
     private_key_path = os.getenv("WECHAT_PAY_MCH_PRIVATE_KEY_PATH", "").strip()
     if not all([mchid, serial_no, private_key_path]):
-        raise HTTPException(
-            status_code=503,
-            detail="微信支付未配置：需要 WECHAT_PAY_MCH_ID、WECHAT_PAY_MCH_SERIAL_NO、WECHAT_PAY_MCH_PRIVATE_KEY_PATH。",
-        )
+        raise_wechatpay_unavailable("missing order query configuration")
+    private_key_path = require_readable_wechatpay_private_key(private_key_path)
     path = f"/v3/pay/transactions/out-trade-no/{quote(out_trade_no)}?mchid={quote(mchid)}"
     return wechatpay_v3_request(
         method="GET",
@@ -1508,8 +1507,27 @@ def wechatpay_v3_request(
             payload = response.read().decode("utf-8")
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise HTTPException(status_code=502, detail=f"WeChat Pay request failed: {detail}") from exc
+        raise_wechatpay_unavailable(f"WeChat Pay request failed: {detail}", exc)
     return json.loads(payload or "{}")
+
+
+def require_readable_wechatpay_private_key(private_key_path: str) -> str:
+    try:
+        key_path = Path(private_key_path)
+        if not key_path.exists():
+            raise_wechatpay_unavailable("private key path does not exist")
+        if not key_path.is_file():
+            raise_wechatpay_unavailable("private key path is not a file")
+        if not os.access(key_path, os.R_OK):
+            raise_wechatpay_unavailable("private key path is not readable")
+    except OSError as exc:
+        raise_wechatpay_unavailable("private key path cannot be checked", exc)
+    return str(key_path)
+
+
+def raise_wechatpay_unavailable(reason: str, exc: Exception | None = None) -> None:
+    LOGGER.warning("WeChat Pay unavailable: %s", reason, exc_info=exc)
+    raise HTTPException(status_code=503, detail=WECHATPAY_UNAVAILABLE_DETAIL)
 
 
 def wechatpay_sign(message: str, private_key_path: str) -> str:
@@ -1521,7 +1539,7 @@ def wechatpay_sign(message: str, private_key_path: str) -> str:
     )
     if process.returncode != 0:
         error = process.stderr.decode("utf-8", errors="replace").strip()
-        raise HTTPException(status_code=503, detail=f"WeChat Pay signing failed: {error}")
+        raise_wechatpay_unavailable(f"WeChat Pay signing failed: {error}")
     return base64.b64encode(process.stdout).decode("ascii")
 
 
@@ -1818,6 +1836,57 @@ def direct_upload_object_url(settings: COSDirectUploadSettings, object_key: str)
     return f"{settings.upload_url.rstrip('/')}/{quote(object_key, safe='/')}"
 
 
+def build_cos_put_upload_request(
+    *,
+    settings: COSDirectUploadSettings,
+    object_key: str,
+    content_type: str,
+    start_at: int,
+    expires_at: int,
+) -> tuple[str, dict[str, str]]:
+    key_time = f"{start_at};{expires_at}"
+    host = f"{settings.bucket}.cos.{settings.region}.myqcloud.com"
+    encoded_key = url_quote(object_key, safe="/")
+    encoded_content_type = url_quote(content_type, safe="")
+    http_string = "\n".join(
+        [
+            "put",
+            f"/{encoded_key}",
+            "",
+            f"content-type={encoded_content_type}&host={host}",
+            "",
+        ]
+    )
+    string_to_sign = "\n".join(
+        [
+            "sha1",
+            key_time,
+            hashlib.sha1(http_string.encode("utf-8")).hexdigest(),
+            "",
+        ]
+    )
+    sign_key = hmac.new(settings.secret_key.encode("utf-8"), key_time.encode("utf-8"), hashlib.sha1).hexdigest()
+    signature = hmac.new(sign_key.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1).hexdigest()
+    authorization = "&".join(
+        [
+            "q-sign-algorithm=sha1",
+            f"q-ak={settings.secret_id}",
+            f"q-sign-time={key_time}",
+            f"q-key-time={key_time}",
+            "q-header-list=content-type;host",
+            "q-url-param-list=",
+            f"q-signature={signature}",
+        ]
+    )
+    return (
+        f"https://{host}/{encoded_key}",
+        {
+            "Authorization": authorization,
+            "Content-Type": content_type,
+        },
+    )
+
+
 def build_cos_post_upload_policy(
     *,
     settings: COSDirectUploadSettings,
@@ -1825,7 +1894,7 @@ def build_cos_post_upload_policy(
     content_type: str,
     start_at: int,
     expires_at: int,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     key_time = f"{start_at};{expires_at}"
     policy_document = {
         "expiration": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(expires_at)),
@@ -1845,7 +1914,7 @@ def build_cos_post_upload_policy(
     sign_key = hmac.new(settings.secret_key.encode("utf-8"), key_time.encode("utf-8"), hashlib.sha1).hexdigest()
     string_to_sign = hashlib.sha1(policy_text.encode("utf-8")).hexdigest()
     signature = hmac.new(sign_key.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1).hexdigest()
-    return policy, signature
+    return key_time, policy, signature
 
 
 def site_session_token_from_request(request: Request) -> str:

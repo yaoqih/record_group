@@ -46,7 +46,7 @@
     <view class="panel-header compact-header">
       <view class="panel-header-main">
         <view class="panel-title">最近上传</view>
-        <view class="panel-note">点按查看详情和确认转写。</view>
+        <view class="panel-note">{{latestTask.actionNote}}</view>
       </view>
       <t-tag theme="{{latestTask.statusTheme}}" variant="light">{{latestTask.statusLabel}}</t-tag>
     </view>

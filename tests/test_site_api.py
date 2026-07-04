@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 os.environ["RECORDFLOW_SKIP_DEFAULT_APP"] = "1"
@@ -166,8 +165,32 @@ def test_site_me_wechatpay_recharge_requires_configuration(tmp_path, monkeypatch
     )
 
     assert response.status_code == 503
-    assert "微信支付未配置" in response.json()["detail"]
+    assert response.json()["detail"] == "微信支付暂不可用，请稍后再试。"
     repo.close()
+
+
+def test_wechatpay_private_key_permission_error_returns_503(monkeypatch):
+    monkeypatch.setenv("WECHAT_MINIAPP_APPID", "wx-test")
+    monkeypatch.setenv("WECHAT_PAY_MCH_ID", "mch-id")
+    monkeypatch.setenv("WECHAT_PAY_MCH_SERIAL_NO", "serial-no")
+    monkeypatch.setenv("WECHAT_PAY_MCH_PRIVATE_KEY_PATH", "/root/cert/wechatpay/apiclient_key.pem")
+
+    def raise_permission(self):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(api_module.Path, "exists", raise_permission)
+
+    response = client_call_http_exception(
+        lambda: api_module.create_wechatpay_jsapi_recharge(
+            user_id="usr_1",
+            openid="openid-1",
+            points=100,
+            amount_cents=100,
+        )
+    )
+
+    assert response.status_code == 503
+    assert response.detail == "微信支付暂不可用，请稍后再试。"
 
 
 def test_pending_upload_path_uses_configured_root(tmp_path, monkeypatch):
@@ -182,7 +205,7 @@ def test_pending_upload_path_uses_configured_root(tmp_path, monkeypatch):
     assert path.parent.exists()
 
 
-def test_site_me_direct_upload_init_returns_cos_post_policy(tmp_path, monkeypatch):
+def test_site_me_direct_upload_init_returns_cos_signed_put_request(tmp_path, monkeypatch):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
     monkeypatch.setenv("TENCENTCLOUD_SECRET_ID", "cos-secret-id")
@@ -207,14 +230,18 @@ def test_site_me_direct_upload_init_returns_cos_post_policy(tmp_path, monkeypatc
     body = response.json()
     upload = body["upload"]
     form_data = upload["form_data"]
-    policy = json_loads_base64(form_data["policy"])
+    assert upload["method"] == "POST"
+    assert upload["auth"] == "signed-post"
     assert upload["url"] == "https://record-1439403413.cos.ap-shanghai.myqcloud.com"
     assert upload["object_key"].startswith("staging/pending/")
+    assert upload["headers"] == {}
     assert form_data["key"] == upload["object_key"]
+    assert form_data["Content-Type"] == "audio/mpeg"
     assert form_data["q-ak"] == "cos-secret-id"
-    assert policy["conditions"][0] == {"bucket": "record-1439403413"}
-    assert {"key": upload["object_key"]} in policy["conditions"]
-    assert ["content-length-range", 1, api_module.SITE_TASK_MAX_AUDIO_BYTES] in policy["conditions"]
+    assert form_data["q-sign-algorithm"] == "sha1"
+    assert form_data["q-key-time"]
+    assert form_data["policy"]
+    assert form_data["q-signature"]
     repo.close()
 
 
@@ -357,8 +384,12 @@ def test_site_me_direct_upload_complete_rejects_other_user_token(tmp_path, monke
     repo.close()
 
 
-def json_loads_base64(value: str) -> dict:
-    return json.loads(base64.b64decode(value).decode("utf-8"))
+def client_call_http_exception(func):
+    try:
+        func()
+    except api_module.HTTPException as exc:
+        return exc
+    raise AssertionError("Expected HTTPException")
 
 
 def test_site_me_wechatpay_confirm_queries_order_and_credits_once(tmp_path, monkeypatch):
