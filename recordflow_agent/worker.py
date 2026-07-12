@@ -37,6 +37,8 @@ from recordflow_agent.wechat_subscribe import send_task_complete_subscription
 
 LOGGER = logging.getLogger(__name__)
 QUEUE_MAINTENANCE_INTERVAL_SECONDS = 300.0
+DEFAULT_STALE_JOB_MAX_AGE_SECONDS = 900
+STALE_JOB_SAFETY_MARGIN_SECONDS = 300
 
 
 class SiteTaskExpiredError(RuntimeError):
@@ -432,8 +434,9 @@ def run_worker(
     job_types: set[str] | None = None,
     sleep: Callable[[float], None] | None = None,
 ) -> None:
+    stale_job_max_age_seconds = queue_stale_job_max_age_seconds()
     if hasattr(repo, "requeue_stale_running_jobs"):
-        repo.requeue_stale_running_jobs()
+        repo.requeue_stale_running_jobs(max_age_seconds=stale_job_max_age_seconds)
     recover_pending_site_notifications(repo)
     last_queue_maintenance = time.monotonic()
     sleep_fn = sleep or time.sleep
@@ -444,7 +447,7 @@ def run_worker(
         now = time.monotonic()
         if now - last_queue_maintenance >= QUEUE_MAINTENANCE_INTERVAL_SECONDS:
             if hasattr(repo, "requeue_stale_running_jobs"):
-                repo.requeue_stale_running_jobs()
+                repo.requeue_stale_running_jobs(max_age_seconds=stale_job_max_age_seconds)
             recover_pending_site_notifications(repo)
             last_queue_maintenance = now
         processed = process_next_job(repo, job_types=job_types)
@@ -458,6 +461,14 @@ def run_worker(
             maximum_poll_seconds,
             max(initial_poll_seconds, idle_poll_seconds * 2.0),
         )
+
+
+def queue_stale_job_max_age_seconds() -> int:
+    file_timeout_seconds = int(os.getenv("RECORDFLOW_STEPFUN_FILE_TIMEOUT_SECONDS", "1800"))
+    return max(
+        DEFAULT_STALE_JOB_MAX_AGE_SECONDS,
+        file_timeout_seconds + STALE_JOB_SAFETY_MARGIN_SECONDS,
+    )
 
 
 def recover_pending_site_notifications(repo: object) -> int:

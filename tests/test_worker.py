@@ -7,6 +7,12 @@ from recordflow_agent.sqlite_repository import SQLiteRepository
 from recordflow_agent.worker import process_next_job, run_worker, transcode_audio_to_ogg_opus
 
 
+def test_worker_stale_job_window_exceeds_file_asr_timeout(monkeypatch):
+    monkeypatch.setenv("RECORDFLOW_STEPFUN_FILE_TIMEOUT_SECONDS", "1800")
+
+    assert worker_module.queue_stale_job_max_age_seconds() == 2100
+
+
 def test_worker_backs_off_when_idle_and_resets_after_processing(monkeypatch):
     poll_results = iter([False, False, False, False, True, False])
     sleep_delays = []

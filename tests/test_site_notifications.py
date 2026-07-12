@@ -349,15 +349,17 @@ def test_notification_schema_is_available_for_sqlite_and_postgres(tmp_path):
 
 
 def test_worker_runs_queue_maintenance_every_five_minutes(monkeypatch):
+    monkeypatch.setenv("RECORDFLOW_STEPFUN_FILE_TIMEOUT_SECONDS", "1800")
+
     class WorkerStopped(Exception):
         pass
 
     class FakeRepo:
         def __init__(self):
-            self.requeue_calls = 0
+            self.requeue_calls = []
 
-        def requeue_stale_running_jobs(self):
-            self.requeue_calls += 1
+        def requeue_stale_running_jobs(self, max_age_seconds=900):
+            self.requeue_calls.append(max_age_seconds)
             return 0
 
     repo = FakeRepo()
@@ -386,5 +388,5 @@ def test_worker_runs_queue_maintenance_every_five_minutes(monkeypatch):
     with pytest.raises(WorkerStopped):
         run_worker(repo=repo, poll_seconds=1.0, sleep=fake_sleep)
 
-    assert repo.requeue_calls == 2
+    assert repo.requeue_calls == [2100, 2100]
     assert recovery_calls == [repo, repo]
