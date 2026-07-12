@@ -22,7 +22,7 @@ from websockets.sync.client import connect
 
 DEFAULT_STEPFUN_BASE_URL = "https://api.stepfun.com"
 DEFAULT_STEPFUN_MODEL = "stepaudio-2.5-asr"
-DEFAULT_STEPFUN_STREAM_MODEL = "step-asr-1.1-stream"
+DEFAULT_STEPFUN_STREAM_MODEL = DEFAULT_STEPFUN_MODEL
 STEPFUN_MAX_AUDIO_DATA_BYTES = 40 * 1024 * 1024
 STEPFUN_MAX_FILE_BYTES = STEPFUN_MAX_AUDIO_DATA_BYTES
 
@@ -154,7 +154,8 @@ class StepFunASRClient:
             response = request_json(query_request, self.config.timeout_seconds)
             status = str(response.get("status") or "").upper()
             if status == "FAILED":
-                raise RuntimeError(f"StepFun ASR file task failed for task {task_id}.")
+                error = response.get("error")
+                raise RuntimeError(f"StepFun ASR file task failed for task {task_id}: {error or response}.")
             if response.get("result"):
                 return {
                     "session_id": task_id,

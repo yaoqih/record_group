@@ -259,7 +259,7 @@ def test_worker_uses_file_asr_for_utterances_when_enabled(tmp_path, monkeypatch)
     class FakeASRClient:
         config = type("Config", (), {"timeout_seconds": 30, "show_utterances": True})()
 
-        def transcribe_url(self, url, content_type):
+        def transcribe_file_url(self, url, content_type):
             captured["url"] = url
             captured["content_type"] = content_type
             return {
@@ -334,7 +334,7 @@ def test_worker_splits_large_file_asr_utterance_before_persisting_media(tmp_path
     class FakeASRClient:
         config = type("Config", (), {"timeout_seconds": 30, "show_utterances": True})()
 
-        def transcribe_url(self, url, content_type):
+        def transcribe_file_url(self, url, content_type):
             return {
                 "task_id": "file-task-id",
                 "text": text,
@@ -372,7 +372,7 @@ def test_worker_splits_large_file_asr_utterance_before_persisting_media(tmp_path
     repo.close()
 
 
-def test_worker_falls_back_to_sse_when_file_asr_fails(tmp_path, monkeypatch):
+def test_worker_fails_media_when_file_asr_fails_in_utterance_mode(tmp_path, monkeypatch):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     profile = load_profile("project_meeting")
     workspace_id = repo.create_workspace("RecordFlow product", profile.name)
@@ -400,7 +400,7 @@ def test_worker_falls_back_to_sse_when_file_asr_fails(tmp_path, monkeypatch):
     class FakeASRClient:
         config = type("Config", (), {"timeout_seconds": 30, "show_utterances": True})()
 
-        def transcribe_url(self, url, content_type):
+        def transcribe_file_url(self, url, content_type):
             raise RuntimeError("StepFun ASR file task failed for task task-123.")
 
         def transcribe_bytes(self, data, filename, content_type):
@@ -432,10 +432,11 @@ def test_worker_falls_back_to_sse_when_file_asr_fails(tmp_path, monkeypatch):
     media = repo.get_media_record(media_id)
 
     assert processed is True
-    assert job["status"] == "completed"
-    assert media["status"] == "processed"
-    assert media["asr_task_id"] == "fallback-session-id"
-    assert captured["bytes_called"] is True
+    assert job["status"] == "failed"
+    assert media["status"] == "failed"
+    assert media["asr_task_id"] is None
+    assert "file task failed" in media["error"]
+    assert captured["bytes_called"] is False
     repo.close()
 
 

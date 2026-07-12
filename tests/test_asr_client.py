@@ -198,7 +198,7 @@ def test_stepfun_asr_client_uses_file_api_when_show_utterances_enabled(monkeypat
             api_key="step-key",
             base_url="https://api.stepfun.com",
             model_name="stepaudio-2.5-asr",
-            file_model_name="step-asr-1.1",
+            file_model_name="stepaudio-2.5-asr",
             timeout_seconds=30,
             show_utterances=True,
         )
@@ -210,7 +210,7 @@ def test_stepfun_asr_client_uses_file_api_when_show_utterances_enabled(monkeypat
     assert result["utterances"][0]["start_time"] == 0
     assert requests[0]["url"] == "https://api.stepfun.com/v1/audio/asr/file/submit"
     assert requests[0]["payload"]["request"]["show_utterances"] is True
-    assert requests[0]["payload"]["request"]["model_name"] == "step-asr-1.1"
+    assert requests[0]["payload"]["request"]["model_name"] == "stepaudio-2.5-asr"
     assert requests[1]["url"] == "https://api.stepfun.com/v1/audio/asr/file/query"
     assert requests[1]["payload"] == {"task_id": "task-123"}
 
@@ -347,7 +347,7 @@ def test_stepfun_asr_client_uses_realtime_stream_with_utterances(monkeypatch):
         StepFunASRConfig(
             api_key="step-key",
             base_url="https://api.stepfun.com",
-            stream_model_name="step-asr-1.1-stream",
+            stream_model_name="stepaudio-2.5-asr",
             timeout_seconds=30,
             show_utterances=True,
         )

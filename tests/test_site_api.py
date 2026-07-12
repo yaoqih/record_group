@@ -661,7 +661,7 @@ def test_site_task_detail_exposes_media_and_utterances_for_editor(tmp_path, monk
     class FakeASRClient:
         config = type("Config", (), {"timeout_seconds": 30, "show_utterances": True})()
 
-        def transcribe_url(self, url, content_type=None):
+        def transcribe_file_url(self, url, content_type=None):
             return {
                 "task_id": "stepaudio-task-1",
                 "text": "你好，这是一段测试转写。",
@@ -724,7 +724,7 @@ def test_site_task_correction_persists_editable_utterances(tmp_path, monkeypatch
     class FakeASRClient:
         config = type("Config", (), {"timeout_seconds": 30, "show_utterances": True})()
 
-        def transcribe_url(self, url, content_type=None):
+        def transcribe_file_url(self, url, content_type=None):
             return {
                 "task_id": "stepaudio-task-1",
                 "text": "你好，这是一段测试转写。",
@@ -907,7 +907,7 @@ def test_site_user_task_list_is_lightweight_without_editor_payload(tmp_path, mon
     class FakeASRClient:
         config = type("Config", (), {"timeout_seconds": 30, "show_utterances": True})()
 
-        def transcribe_url(self, url, content_type=None):
+        def transcribe_file_url(self, url, content_type=None):
             return {
                 "task_id": "stepaudio-task-1",
                 "text": "你好，这是一段测试转写。",
@@ -969,7 +969,7 @@ def test_site_task_detail_is_lightweight_and_editor_payload_moves_to_editor_endp
     class FakeASRClient:
         config = type("Config", (), {"timeout_seconds": 30, "show_utterances": True})()
 
-        def transcribe_url(self, url, content_type=None):
+        def transcribe_file_url(self, url, content_type=None):
             return {
                 "task_id": "stepaudio-task-1",
                 "text": "你好，这是一段测试转写。",

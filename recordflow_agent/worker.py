@@ -186,17 +186,7 @@ def process_media_transcription_job(repo: object, job: dict) -> None:
         filename,
         content_type,
     ):
-        try:
-            result = asr_client.transcribe_url(download_url, content_type=content_type)
-        except RuntimeError as exc:
-            if "file task failed" not in str(exc).lower() and "file query timed out" not in str(exc).lower():
-                raise
-            data = request_bytes(Request(download_url, method="GET"), asr_client.config.timeout_seconds)
-            if is_stepfun_remuxable_audio(filename, content_type):
-                data = remux_webm_to_ogg(data)
-                filename = f"{Path(filename).stem}.ogg"
-                content_type = "audio/ogg"
-            result = asr_client.transcribe_bytes(data=data, filename=filename, content_type=content_type)
+        result = asr_client.transcribe_file_url(download_url, content_type=content_type)
     else:
         data = request_bytes(Request(download_url, method="GET"), asr_client.config.timeout_seconds)
         if is_stepfun_remuxable_audio(filename, content_type):
