@@ -15,10 +15,11 @@ def test_user_admin_and_agreement_pages_are_exposed(tmp_path):
     assert user_response.status_code == 200
     assert "<div id=\"root\"></div>" in user_response.text or "上传到服务器并创建任务" in user_response.text
     assert admin_response.status_code == 200
-    assert "ASR 管理端" in admin_response.text
-    assert "用户与点数" in admin_response.text
+    assert "<div id=\"root\"></div>" in admin_response.text or "ASR 管理端" in admin_response.text
     assert agreement_response.status_code == 200
     assert "用户协议" in agreement_response.text
+    assert "服务提供方" in agreement_response.text
+    assert "1375626371@qq.com" in agreement_response.text
 
 
 def test_dashboard_endpoint_still_returns_workspace_results(tmp_path):

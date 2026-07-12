@@ -65,10 +65,21 @@ def test_site_wechat_login_creates_user_and_session(tmp_path, monkeypatch):
     app = create_app(repo)
     client = TestClient(app)
 
-    login = client.post("/site/auth/wechat/login", json={"code": "login-code", "nickname": "Alice"})
+    login = client.post(
+        "/site/auth/wechat/login",
+        json={
+            "code": "login-code",
+            "nickname": "Alice",
+            "agreement_version": "v2",
+            "agreement_accepted": True,
+        },
+    )
     token = login.json()["token"]
     me = client.get("/site/me", headers={"Authorization": f"Bearer {token}"})
-    second_login = client.post("/site/auth/wechat/login", json={"code": "login-code-2"})
+    second_login = client.post(
+        "/site/auth/wechat/login",
+        json={"code": "login-code-2", "agreement_version": "v2", "agreement_accepted": True},
+    )
 
     assert login.status_code == 200
     assert login.json()["user"]["name"] == "Alice"
@@ -88,7 +99,10 @@ def test_site_dev_login_creates_local_user(tmp_path, monkeypatch):
     app = create_app(repo)
     client = TestClient(app)
 
-    login = client.post("/site/auth/dev/login", json={"nickname": "Local"})
+    login = client.post(
+        "/site/auth/dev/login",
+        json={"nickname": "Local", "agreement_version": "v2", "agreement_accepted": True},
+    )
     token = login.json()["token"]
     me = client.get("/site/me", headers={"Authorization": f"Bearer {token}"})
 
@@ -117,7 +131,10 @@ def test_site_me_task_upload_uses_session_user(tmp_path, monkeypatch):
     app = create_app(repo)
     client = TestClient(app)
 
-    login = client.post("/site/auth/wechat/login", json={"code": "login-code"})
+    login = client.post(
+        "/site/auth/wechat/login",
+        json={"code": "login-code", "agreement_version": "v2", "agreement_accepted": True},
+    )
     token = login.json()["token"]
     response = client.post(
         "/site/me/tasks",
@@ -501,6 +518,92 @@ def test_postgres_schema_init_preserves_legacy_raw_result_default():
 
     assert any("ADD COLUMN IF NOT EXISTS raw_result JSONB DEFAULT '{}'::jsonb" in stmt for stmt in executed)
     assert any("ALTER COLUMN raw_result SET DEFAULT '{}'::jsonb" in stmt for stmt in executed)
+    assert any("idx_site_asr_tasks_user_created" in stmt for stmt in executed)
+    assert any("idx_site_asr_tasks_media_id" in stmt for stmt in executed)
+    assert any("idx_site_asr_tasks_status_updated" in stmt for stmt in executed)
+    assert any("idx_site_asr_tasks_expires_at" in stmt for stmt in executed)
+
+
+def test_site_store_task_list_uses_lightweight_join_and_supports_pagination(tmp_path):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    workspace_id = repo.create_workspace("ASR", "detailed_summary")
+    store = ASRSiteStore(repo)
+    try:
+        user = store.create_user("Alice")
+        for task_id in ("task-a", "task-b", "task-c"):
+            store.create_pending_task(
+                task_id=task_id,
+                user_id=user["id"],
+                workspace_id=workspace_id,
+                title=f"{task_id}.mp3",
+                source_name=f"{task_id}.mp3",
+                content_type="audio/mpeg",
+                original_size_bytes=1024,
+                duration_seconds=30,
+                points_cost=1,
+                charge_basis="30.0s -> 1 points",
+                agreement_version="v1",
+                local_file_path=f"/tmp/{task_id}.mp3",
+            )
+
+        media_id = repo.add_media_record(
+            workspace_id=workspace_id,
+            source_name="task-c.mp3",
+            stored_name="task-c.ogg",
+            url="https://cdn.example.com/task-c.ogg",
+            public_url="https://public.example.com/task-c.ogg",
+            object_name="uploads/task-c.ogg",
+            content_type="audio/ogg",
+            original_size_bytes=1024,
+            compressed_size_bytes=512,
+            compression_codec="libopus",
+        )
+        store.attach_task_media_job("task-c", media_id, "job-c")
+
+        statements: list[str] = []
+        store.conn.set_trace_callback(statements.append)
+        first_page = store.list_user_tasks(user["id"], limit=2)
+        second_page = store.list_user_tasks(user["id"], limit=1, offset=1)
+        statuses = store.list_user_task_statuses(user["id"])
+        store.conn.set_trace_callback(None)
+
+        assert [task["id"] for task in first_page] == ["task-c", "task-b"]
+        assert [task["id"] for task in second_page] == ["task-b"]
+        assert first_page[0]["media"] == {
+            "id": media_id,
+            "source_name": "task-c.mp3",
+            "stored_name": "task-c.ogg",
+            "url": "https://cdn.example.com/task-c.ogg",
+            "public_url": "https://public.example.com/task-c.ogg",
+            "content_type": "audio/ogg",
+            "status": "uploaded",
+            "created_at": first_page[0]["media"]["created_at"],
+            "updated_at": first_page[0]["media"]["updated_at"],
+        }
+        assert first_page[1]["media"] is None
+        assert statuses[0]["id"] == "task-c"
+        assert set(statuses[0]) == {"id", "status", "updated_at", "error"}
+
+        list_queries = [statement.lower() for statement in statements if "left join media_records" in statement.lower()]
+        assert len(list_queries) == 2
+        assert all("select *" not in statement for statement in list_queries)
+        assert all("editable_utterances" not in statement for statement in list_queries)
+        assert all("raw_result" not in statement for statement in list_queries)
+
+        index_names = {
+            row["name"]
+            for row in store.conn.execute("PRAGMA index_list(site_asr_tasks)").fetchall()
+        }
+        assert {
+            "idx_site_asr_tasks_user_created",
+            "idx_site_asr_tasks_media_id",
+            "idx_site_asr_tasks_status_updated",
+            "idx_site_asr_tasks_expires_at",
+            "idx_site_asr_tasks_local_expires_at",
+        }.issubset(index_names)
+    finally:
+        store.close()
+        repo.close()
 
 
 def test_site_submit_task_creates_job_and_deducts_points(tmp_path, monkeypatch):
@@ -938,6 +1041,11 @@ def test_site_user_task_list_is_lightweight_without_editor_payload(tmp_path, mon
     ).json()
     client.post(f"/site/tasks/{submit['task']['id']}/start", json={"confirm_points": True})
     drain_site_task_jobs(repo)
+
+    def fail_if_media_is_loaded_separately(media_id):
+        raise AssertionError(f"unexpected N+1 media query for {media_id}")
+
+    monkeypatch.setattr(repo, "get_media_record", fail_if_media_is_loaded_separately)
 
     response = client.get(f"/site/users/{user['id']}/tasks")
     assert response.status_code == 200

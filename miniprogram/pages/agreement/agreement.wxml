@@ -1,0 +1,110 @@
+<view class="page agreement-page">
+  <view class="agreement-hero">
+    <view class="agreement-icon"><t-icon name="file-paste" size="42rpx" color="#08705d" /></view>
+    <view class="agreement-kicker">RECORDFLOW</view>
+    <view class="agreement-title">用户协议与隐私说明</view>
+    <view class="agreement-meta">版本 {{version}} · 生效日期 {{effectiveDate}}</view>
+  </view>
+
+  <view class="agreement-notice">
+    <t-icon name="info-circle" size="30rpx" color="#08705d" />
+    <view>请在使用录音上传、转写、导出和点数服务前仔细阅读。点击“同意并继续”或勾选同意，表示你已阅读、理解并接受本用户协议与隐私说明。</view>
+  </view>
+  <view wx:if="{{error}}" class="error-box agreement-error">{{error}}</view>
+
+  <view class="agreement-card">
+    <view class="agreement-section">
+      <view class="section-index">01</view>
+      <view class="section-content"><view class="section-title">协议范围、隐私说明与服务</view><view class="section-text">RecordFlow 为用户提供音频上传、自动语音转写、分句回听、文本整理与导出等功能。本说明同时告知为完成上述服务所需的个人信息处理规则。具体功能、可用格式、文件大小、处理时间和收费方式以页面实际展示为准。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">02</view>
+      <view class="section-content"><view class="section-title">账号与使用安全</view><view class="section-text">你可通过微信授权登录。请妥善保管微信账号、设备和登录状态，不得出借、转让或许可他人冒用。如发现未经授权的使用，请及时联系我们。你应对账号下的上传、转写、删除、导出和点数消费行为负责。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">03</view>
+      <view class="section-content"><view class="section-title">合法上传、敏感信息与参与者授权</view><view class="section-text">你确认对上传的音频及其包含的声音、言论和信息拥有合法权利，或已对所有录音参与者完成必要告知并获得合法授权。录音可能包含声音、通信内容、身份、健康、金融、行踪或其他敏感个人信息；在法律要求时，你应获得单独同意或监护人同意。不得上传侵犯隐私、肖像、著作权、商业秘密或其他合法权益的内容，不得上传违法、有害、欺诈或危害网络安全的内容。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">04</view>
+      <view class="section-content"><view class="section-title">点数、计费与支付</view><view class="section-text">转写任务可按页面展示的规则消耗点数。系统通常会在开始前展示预估时长和点数，你确认后再扣减；实际规则以确认页为准。充值、赠送、退还和有效期如有特别说明，以对应页面和法律规定为准。请在支付前核对账号、金额和点数；如发生重复扣款、未到账或任务异常，可凭支付记录联系我们核查。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">05</view>
+      <view class="section-content"><view class="section-title">转写误差与使用提示</view><view class="section-text">自动转写可能受口音、方言、背景噪声、多人重叠、专业术语、录音质量和第三方模型状态影响，可能出现错字、漏字、断句、说话人或时间戳误差。转写结果仅作为辅助工具，不构成法律、医疗、财务或其他专业意见。用于重要决策、证据、字幕发布或对外文件前，请人工复核原音和文本。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">06</view>
+      <view class="section-content"><view class="section-title">收集的数据类别与处理目的</view><view class="section-text">为实现账号、转写、支付、安全和客服功能，我们会在必要范围内收集或处理：（1）微信提供的账号标识（如 OpenID，UnionID 仅在实际授权与配置支持时取得）和你填写或授权的昵称，用于登录与账号识别；（2）文件名、大小、时长、格式、任务状态、时间和点数等任务元数据，用于上传、计费、排队和展示；（3）录音及转写文本，用于语音识别、回听和导出；（4）订单号、金额、支付状态等必要支付订单信息，用于充值、对账和售后，我们不直接收集银行卡密码；（5）操作日志、IP 地址、设备与系统版本、网络状态和异常信息，用于安全防护、故障排查和性能改进。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">07</view>
+      <view class="section-content"><view class="section-title">第三方处理、部署区域与跨境</view><view class="section-text">完成服务可能需要：由微信提供登录和支付能力；由对象存储服务商存放待处理音频与结果；由 ASR 语音识别供应商处理录音并返回文本。我们仅在完成相应目的所必需的范围内提供数据，并要求其采取合理保护措施。具体服务商、服务器区域、隐私规则及是否涉及跨境以实际部署和上线披露为准；如发生个人信息跨境，我们将依法完成必要程序、单独告知并在需要时取得你的单独同意。运营方应在上线前根据实际部署完成真实的第三方清单配置。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">08</view>
+      <view class="section-content"><view class="section-title">七天保留、删除与必要记录</view><view class="section-text">任务音频、转写文本及直接关联结果原则上自上传成功或任务创建起保留 7 天，以任务页显示的“保留至”时间为准，到期后进行删除或不可恢复清理。你也可在任务页提前删除，删除后无法恢复。由于队列、缓存、备份和第三方处理存在合理延迟，全链路清理可能需要一定时间。为账务、安全、纠纷处理或履行法定义务，我们可在必要的最短期限内保留订单、点数流水、安全日志或依法必须保留的记录。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">09</view>
+      <view class="section-content"><view class="section-title">查询、更正、删除与撤回同意</view><view class="section-text">你可依法请求查询、更正、复制或删除个人信息，可在任务页删除单个任务，也可通过本页底部撤回对当前版本的同意。撤回后将无法继续登录或上传新录音，但不影响撤回前基于同意已完成的合法处理。如需删除账号、查询订单信息或行使其他法定权利，请通过本页联系方式提交请求，我们会在验证身份后处理。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">10</view>
+      <view class="section-content"><view class="section-title">安全措施与使用提示</view><view class="section-text">我们会采取与服务风险相匹配的访问控制、身份校验、日志审计、数据隔离、备份与安全响应等合理技术和管理措施。但互联网传输和第三方服务无法保证绝对安全。请勿上传与转写目的无关的高度敏感信息，妥善保管微信账号和设备，并在 7 天保留期内及时导出、备份所需结果。如发生数据安全事件，我们将依法采取处置和告知措施。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">11</view>
+      <view class="section-content"><view class="section-title">未成年人保护</view><view class="section-text">若你未满 18 周岁，应在父母或其他监护人阅读、理解并同意本说明后，在其指导和监督下使用服务。处理不满 14 周岁未成年人的个人信息前，应取得其父母或其他监护人的同意。如监护人发现未成年人未经同意提供了信息，请联系我们核实并处理。不得在未经合法监护人授权的情况下上传包含未成年人声音或敏感信息的录音。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">12</view>
+      <view class="section-content"><view class="section-title">服务变更、中断与限制</view><view class="section-text">为维护系统、修复故障、升级功能、配合第三方或履行法律义务，服务可能暂时中断、延迟或调整。如你滥用服务、批量攻击、规避限制、侵害他人权益或违反法律及本说明，我们可视情况限制任务、暂停或终止服务，并依法保留追究责任的权利。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">13</view>
+      <view class="section-content"><view class="section-title">知识产权</view><view class="section-text">你依法保留对上传内容和转写结果中属于你的权利。你授予我们仅为提供、维护和保障本服务所必要的处理权限，该权限受本说明的保留与删除规则限制。RecordFlow 的程序、界面、标识、文档和其他服务素材的权利归其合法权利人所有。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">14</view>
+      <view class="section-content"><view class="section-title">责任边界</view><view class="section-text">在法律允许的范围内，对因不可抗力、公共网络故障、第三方服务中断、用户设备或操作不当造成的延迟、丢失或不可用，我们将尽合理努力恢复服务，但不承担超出法定范围的责任。你应自行备份重要原音与导出文件，并对转写结果的复核、编辑、发布和使用负责。本条不排除依法不得限制或免除的责任。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">15</view>
+      <view class="section-content"><view class="section-title">协议更新与终止</view><view class="section-text">我们可因功能、计费、数据处理或法律政策变化更新本协议，并通过页面提示、版本号或其他合理方式告知。若更新涉及你的重要权益，我们会请你重新阅读并确认。如你不同意更新内容，应停止使用相关服务，并在保留期内导出所需数据。</view></view>
+    </view>
+
+    <view class="agreement-section">
+      <view class="section-index">16</view>
+      <view class="section-content"><view class="section-title">适用法律与争议解决</view><view class="section-text">本协议的订立、生效、履行和解释适用中华人民共和国法律。发生争议时，双方应首先友好协商；协商不成的，可依法向有管辖权的人民法院提起诉讼。</view></view>
+    </view>
+
+    <view class="agreement-section agreement-section-last">
+      <view class="section-index">17</view>
+      <view class="section-content"><view class="section-title">运营主体与联系我们</view><view class="section-text">本协议由 {{operator}} 负责说明与解释；法律法规或有权机关另有规定的，从其规定。如对本协议与隐私说明、数据处理、点数订单或转写任务有疑问，请通过以下方式联系：</view><view class="contact-box"><view class="contact-value">{{operator}}</view><view class="contact-value contact-method">{{contact}}</view><view class="contact-note">{{contactNote}}</view></view></view>
+    </view>
+  </view>
+
+  <view class="agreement-footer-space"></view>
+  <view class="agreement-action">
+    <view class="agreement-action-inner">
+      <view class="agreement-action-state"><t-icon name="{{accepted ? 'check-circle-filled' : 'info-circle'}}" size="30rpx" color="{{accepted ? '#08705d' : '#71817c'}}" /><text>{{accepted ? '已同意当前版本' : '同意后即可登录或上传'}}</text></view>
+      <t-button block theme="primary" loading="{{accepting}}" disabled="{{accepted || accepting}}" bind:tap="acceptAgreement">{{accepted ? '已同意' : '同意并继续'}}</t-button>
+      <view wx:if="{{accepted}}" class="withdraw-action" bindtap="withdrawAgreement">撤回对当前版本的同意</view>
+    </view>
+  </view>
+</view>

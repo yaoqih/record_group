@@ -50,3 +50,23 @@ def test_health_does_not_require_api_key(tmp_path, monkeypatch):
     response = client.get("/health")
 
     assert response.status_code == 200
+
+
+def test_admin_shell_is_public_but_admin_data_requires_api_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECORDFLOW_APP_API_KEY", "secret")
+    app = create_app(SQLiteRepository(tmp_path / "recordflow.db"))
+    client = TestClient(app)
+
+    shell = client.get("/admin")
+    nested_shell = client.get("/admin/users")
+    protected_admin_root_post = client.post("/admin")
+    protected_admin_post = client.post("/admin/load-eval", json={})
+    missing = client.get("/site/admin/dashboard")
+    allowed = client.get("/site/admin/dashboard", headers={"X-API-Key": "secret"})
+
+    assert shell.status_code == 200
+    assert nested_shell.status_code == 200
+    assert protected_admin_root_post.status_code == 401
+    assert protected_admin_post.status_code == 401
+    assert missing.status_code == 401
+    assert allowed.status_code == 200

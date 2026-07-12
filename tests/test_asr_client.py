@@ -215,6 +215,70 @@ def test_stepfun_asr_client_uses_file_api_when_show_utterances_enabled(monkeypat
     assert requests[1]["payload"] == {"task_id": "task-123"}
 
 
+def test_stepfun_file_api_polling_backs_off_and_applies_jitter(monkeypatch):
+    responses = iter(
+        [
+            {"task_id": "task-123"},
+            {},
+            {},
+            {},
+            {"result": [{"text": "完成"}]},
+        ]
+    )
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode("utf-8")
+
+    monkeypatch.setattr(
+        asr_client,
+        "urlopen",
+        lambda request, timeout: FakeResponse(next(responses)),
+    )
+    now = [0.0]
+    sleep_delays = []
+    jitter_ranges = []
+
+    def fake_sleep(seconds):
+        sleep_delays.append(seconds)
+        now[0] += seconds
+
+    def fake_random_uniform(lower, upper):
+        jitter_ranges.append((lower, upper))
+        return upper
+
+    client = StepFunASRClient(
+        StepFunASRConfig(
+            api_key="step-key",
+            poll_interval_seconds=10.0,
+            poll_max_interval_seconds=50.0,
+            poll_jitter_ratio=0.1,
+            file_timeout_seconds=200,
+        ),
+        sleep=fake_sleep,
+        monotonic=lambda: now[0],
+        random_uniform=fake_random_uniform,
+    )
+
+    result = client.transcribe_file_url(
+        "https://example.com/meeting.ogg",
+        content_type="audio/ogg",
+    )
+
+    assert result["text"] == "完成"
+    assert sleep_delays == pytest.approx([11.0, 22.0, 55.0])
+    assert jitter_ranges == pytest.approx([(0.0, 1.0), (0.0, 2.0), (0.0, 5.0)])
+
+
 def test_stepfun_asr_config_defaults_file_model_to_stepaudio_2_5(monkeypatch):
     monkeypatch.setenv("RECORDFLOW_STEPFUN_API_KEY", "step-key")
     monkeypatch.delenv("RECORDFLOW_STEPFUN_ASR_FILE_MODEL", raising=False)
@@ -222,6 +286,19 @@ def test_stepfun_asr_config_defaults_file_model_to_stepaudio_2_5(monkeypatch):
     config = StepFunASRConfig.from_env()
 
     assert config.file_model_name == "stepaudio-2.5-asr"
+
+
+def test_stepfun_asr_config_reads_file_polling_controls(monkeypatch):
+    monkeypatch.setenv("RECORDFLOW_STEPFUN_API_KEY", "step-key")
+    monkeypatch.setenv("RECORDFLOW_STEPFUN_POLL_INTERVAL_SECONDS", "2.0")
+    monkeypatch.setenv("RECORDFLOW_STEPFUN_POLL_MAX_INTERVAL_SECONDS", "12.0")
+    monkeypatch.setenv("RECORDFLOW_STEPFUN_POLL_JITTER_RATIO", "0.25")
+
+    config = StepFunASRConfig.from_env()
+
+    assert config.poll_interval_seconds == 2.0
+    assert config.poll_max_interval_seconds == 12.0
+    assert config.poll_jitter_ratio == 0.25
 
 
 def test_stepfun_asr_client_prefers_file_api_before_stream_for_supported_file_audio(monkeypatch):

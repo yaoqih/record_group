@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import random
 import ssl
 import subprocess
 import time
@@ -10,7 +11,7 @@ import urllib.error
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 import tempfile
 from urllib.request import Request, urlopen
 
@@ -25,6 +26,30 @@ DEFAULT_STEPFUN_MODEL = "stepaudio-2.5-asr"
 DEFAULT_STEPFUN_STREAM_MODEL = "step-asr-1.1-stream"
 STEPFUN_MAX_AUDIO_DATA_BYTES = 40 * 1024 * 1024
 STEPFUN_MAX_FILE_BYTES = STEPFUN_MAX_AUDIO_DATA_BYTES
+STEPFUN_FILE_FAST_POLL_WINDOW_SECONDS = 10.0
+STEPFUN_FILE_MEDIUM_POLL_WINDOW_SECONDS = 30.0
+
+
+def stepfun_file_poll_delay(
+    *,
+    base_interval_seconds: float,
+    max_interval_seconds: float,
+    elapsed_seconds: float,
+    jitter_ratio: float,
+    random_uniform: Callable[[float, float], float],
+) -> float:
+    base_interval = max(0.0, base_interval_seconds)
+    maximum_interval = max(base_interval, max_interval_seconds)
+    if elapsed_seconds < STEPFUN_FILE_FAST_POLL_WINDOW_SECONDS:
+        multiplier = 1.0
+    elif elapsed_seconds < STEPFUN_FILE_MEDIUM_POLL_WINDOW_SECONDS:
+        multiplier = 2.0
+    else:
+        multiplier = 5.0
+    interval = min(maximum_interval, base_interval * multiplier)
+    normalized_jitter_ratio = min(1.0, max(0.0, jitter_ratio))
+    jitter = random_uniform(0.0, interval * normalized_jitter_ratio)
+    return interval + jitter
 
 
 @dataclass(frozen=True)
@@ -40,6 +65,8 @@ class StepFunASRConfig:
     show_utterances: bool = True
     poll_interval_seconds: float = 1.0
     file_timeout_seconds: int = 1800
+    poll_max_interval_seconds: float = 5.0
+    poll_jitter_ratio: float = 0.1
 
     @classmethod
     def from_env(cls, dotenv_path: str = ".env") -> "StepFunASRConfig":
@@ -62,13 +89,27 @@ class StepFunASRConfig:
             show_utterances=os.getenv("RECORDFLOW_STEPFUN_SHOW_UTTERANCES", "true").lower()
             not in {"0", "false", "no"},
             poll_interval_seconds=float(os.getenv("RECORDFLOW_STEPFUN_POLL_INTERVAL_SECONDS", "1.0")),
+            poll_max_interval_seconds=float(
+                os.getenv("RECORDFLOW_STEPFUN_POLL_MAX_INTERVAL_SECONDS", "5.0")
+            ),
+            poll_jitter_ratio=float(os.getenv("RECORDFLOW_STEPFUN_POLL_JITTER_RATIO", "0.1")),
             file_timeout_seconds=int(os.getenv("RECORDFLOW_STEPFUN_FILE_TIMEOUT_SECONDS", "1800")),
         )
 
 
 class StepFunASRClient:
-    def __init__(self, config: StepFunASRConfig) -> None:
+    def __init__(
+        self,
+        config: StepFunASRConfig,
+        *,
+        sleep: Callable[[float], None] | None = None,
+        monotonic: Callable[[], float] | None = None,
+        random_uniform: Callable[[float, float], float] | None = None,
+    ) -> None:
         self.config = config
+        self._sleep = sleep or time.sleep
+        self._monotonic = monotonic or time.monotonic
+        self._random_uniform = random_uniform or random.uniform
 
     @classmethod
     def from_env(cls) -> "StepFunASRClient":
@@ -144,8 +185,9 @@ class StepFunASRClient:
         if not task_id:
             raise RuntimeError(f"StepFun ASR file submit did not return task_id: {task}")
 
-        deadline = time.monotonic() + self.config.file_timeout_seconds
-        while time.monotonic() < deadline:
+        started_at = self._monotonic()
+        deadline = started_at + self.config.file_timeout_seconds
+        while self._monotonic() < deadline:
             query_request = self.request(
                 "/v1/audio/asr/file/query",
                 {"task_id": task_id},
@@ -163,7 +205,18 @@ class StepFunASRClient:
                     "utterances": extract_utterances(response),
                     "raw_result": response,
                 }
-            time.sleep(self.config.poll_interval_seconds)
+            now = self._monotonic()
+            remaining_seconds = deadline - now
+            if remaining_seconds <= 0:
+                break
+            delay_seconds = stepfun_file_poll_delay(
+                base_interval_seconds=self.config.poll_interval_seconds,
+                max_interval_seconds=self.config.poll_max_interval_seconds,
+                elapsed_seconds=now - started_at,
+                jitter_ratio=self.config.poll_jitter_ratio,
+                random_uniform=self._random_uniform,
+            )
+            self._sleep(min(delay_seconds, remaining_seconds))
         raise RuntimeError(f"StepFun ASR file query timed out for task {task_id}.")
 
     def transcribe_bytes(

@@ -44,3 +44,4 @@ data/eval/*.json
 .idea/
 .vscode/*
 !.vscode/extensions.json
+data/

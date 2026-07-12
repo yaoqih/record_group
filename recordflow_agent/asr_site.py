@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import psycopg
 from psycopg.rows import dict_row
@@ -18,8 +18,54 @@ from psycopg.types.json import Jsonb
 
 SITE_WORKSPACE_NAME = "ASR 网站"
 SITE_WORKSPACE_PROFILE = "detailed_summary"
-AGREEMENT_VERSION = "v1"
+AGREEMENT_VERSION = "v2"
+SITE_USER_ROLES = frozenset({"user", "admin"})
 PENDING_UPLOAD_DIR = Path("var") / "site_uploads" / "pending"
+T = TypeVar("T")
+
+TASK_SUMMARY_COLUMNS = (
+    "id",
+    "user_id",
+    "workspace_id",
+    "media_id",
+    "job_id",
+    "title",
+    "source_name",
+    "content_type",
+    "status",
+    "points_cost",
+    "charge_basis",
+    "agreement_version",
+    "notify_on_complete",
+    "notification_template_id",
+    "notification_job_id",
+    "notification_status",
+    "notification_attempts",
+    "notification_last_error",
+    "notification_sent_at",
+    "error",
+    "confirmed_at",
+    "completed_at",
+    "expires_at",
+    "created_at",
+    "updated_at",
+    "original_size_bytes",
+    "duration_seconds",
+    "local_file_path",
+    "local_expires_at",
+)
+
+MEDIA_SUMMARY_COLUMNS = (
+    "id",
+    "source_name",
+    "stored_name",
+    "url",
+    "public_url",
+    "content_type",
+    "status",
+    "created_at",
+    "updated_at",
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +121,8 @@ class ASRSiteStore:
         return [self._row_dict(row) for row in rows]
 
     def create_user(self, name: str, role: str = "user") -> dict[str, Any]:
+        if role not in SITE_USER_ROLES:
+            raise ValueError("role must be user or admin.")
         user_id = self.next_id("usr")
         self._execute(
             """
@@ -82,6 +130,19 @@ class ASRSiteStore:
             VALUES ({}, {}, {}, 0)
             """,
             (user_id, name, role),
+        )
+        return self.get_user(user_id)
+
+    def update_user(self, user_id: str, name: str, role: str) -> dict[str, Any]:
+        if role not in SITE_USER_ROLES:
+            raise ValueError("role must be user or admin.")
+        self._execute(
+            """
+            UPDATE site_users
+            SET name = {}, role = {}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = {}
+            """,
+            (name, role, user_id),
         )
         return self.get_user(user_id)
 
@@ -101,6 +162,79 @@ class ASRSiteStore:
         if row is None:
             raise KeyError(user_id)
         return self._row_dict(row)
+
+    def accept_user_agreement(
+        self,
+        user_id: str,
+        agreement_version: str = AGREEMENT_VERSION,
+        client: str = "unknown",
+    ) -> dict[str, Any]:
+        """Record first acceptance of the combined user agreement and privacy notice."""
+        agreement_version = agreement_version.strip()
+        client = client.strip() or "unknown"
+        if not agreement_version:
+            raise ValueError("agreement_version must not be empty.")
+        self.get_user(user_id)
+        self._execute(
+            """
+            INSERT INTO site_user_agreements(
+                user_id, agreement_version, accepted_at, client
+            )
+            VALUES ({}, {}, CURRENT_TIMESTAMP, {})
+            ON CONFLICT(user_id, agreement_version) DO NOTHING
+            """,
+            (user_id, agreement_version, client),
+        )
+        row = self._fetchone(
+            """
+            SELECT user_id, agreement_version, accepted_at, client
+            FROM site_user_agreements
+            WHERE user_id = {} AND agreement_version = {}
+            """,
+            (user_id, agreement_version),
+        )
+        if row is None:
+            raise RuntimeError("Failed to persist user agreement acceptance.")
+        return user_agreement_row(self._row_dict(row))
+
+    def has_accepted_user_agreement(
+        self,
+        user_id: str,
+        agreement_version: str = AGREEMENT_VERSION,
+    ) -> bool:
+        agreement_version = agreement_version.strip()
+        if not agreement_version:
+            return False
+        row = self._fetchone(
+            """
+            SELECT 1
+            FROM site_user_agreements
+            WHERE user_id = {} AND agreement_version = {}
+            """,
+            (user_id, agreement_version),
+        )
+        return row is not None
+
+    def list_user_agreements(self, user_id: str | None = None) -> list[dict[str, Any]]:
+        if user_id is None:
+            rows = self._fetchall(
+                """
+                SELECT user_id, agreement_version, accepted_at, client
+                FROM site_user_agreements
+                ORDER BY accepted_at DESC, user_id, agreement_version DESC
+                """
+            )
+        else:
+            rows = self._fetchall(
+                """
+                SELECT user_id, agreement_version, accepted_at, client
+                FROM site_user_agreements
+                WHERE user_id = {}
+                ORDER BY accepted_at DESC, agreement_version DESC
+                """,
+                (user_id,),
+            )
+        return [user_agreement_row(self._row_dict(row)) for row in rows]
 
     def get_wechat_identity(self, appid: str, openid: str) -> dict[str, Any] | None:
         row = self._fetchone(
@@ -181,27 +315,15 @@ class ASRSiteStore:
     ) -> dict[str, Any]:
         if delta == 0:
             raise ValueError("delta must not be 0.")
-        user = self.get_user(user_id)
-        new_balance = int(user["points_balance"]) + delta
-        if new_balance < 0:
-            raise ValueError("Insufficient points.")
-        ledger_id = self.next_id("ptx")
-        self._execute(
-            """
-            UPDATE site_users
-            SET points_balance = {}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = {}
-            """,
-            (new_balance, user_id),
+        return self._run_atomic(
+            lambda: self._apply_points_without_commit(
+                user_id=user_id,
+                delta=delta,
+                kind=kind,
+                note=note,
+                task_id=task_id,
+            )
         )
-        self._execute(
-            """
-            INSERT INTO site_point_ledger(id, user_id, delta, kind, note, task_id)
-            VALUES ({}, {}, {}, {}, {}, {})
-            """,
-            (ledger_id, user_id, delta, kind, note, task_id),
-        )
-        return self.get_user(user_id)
 
     def list_point_ledger(self, user_id: str | None = None) -> list[dict[str, Any]]:
         if user_id:
@@ -254,27 +376,95 @@ class ASRSiteStore:
         out_trade_no: str,
         transaction_id: str,
     ) -> tuple[dict[str, Any], bool]:
-        order = self.get_payment_order(out_trade_no)
-        if order["status"] == "paid":
-            return order, False
-        user = self.add_points(
-            order["user_id"],
-            delta=int(order["points"]),
-            kind="wechatpay_recharge",
-            note=f"wechatpay {out_trade_no}",
+        def mark_paid() -> tuple[dict[str, Any], bool]:
+            lock_clause = " FOR UPDATE" if self.backend == "postgres" else ""
+            row = self.conn.execute(
+                self._format_query(
+                    "SELECT * FROM site_payment_orders WHERE out_trade_no = {}" + lock_clause
+                ),
+                (out_trade_no,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(out_trade_no)
+            order = self._row_dict(row)
+            if order["status"] == "paid":
+                return self.get_user(order["user_id"]), False
+            user = self._apply_points_without_commit(
+                user_id=order["user_id"],
+                delta=int(order["points"]),
+                kind="wechatpay_recharge",
+                note=f"wechatpay {out_trade_no}",
+                task_id=None,
+            )
+            self.conn.execute(
+                self._format_query(
+                    """
+                    UPDATE site_payment_orders
+                    SET status = 'paid',
+                        transaction_id = {},
+                        paid_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE out_trade_no = {} AND status != 'paid'
+                    """
+                ),
+                (transaction_id, out_trade_no),
+            )
+            return user, True
+
+        return self._run_atomic(mark_paid)
+
+    def _apply_points_without_commit(
+        self,
+        *,
+        user_id: str,
+        delta: int,
+        kind: str,
+        note: str,
+        task_id: str | None,
+    ) -> dict[str, Any]:
+        row = self.conn.execute(
+            self._format_query(
+                """
+                UPDATE site_users
+                SET points_balance = points_balance + {},
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = {} AND points_balance + {} >= 0
+                RETURNING *
+                """
+            ),
+            (delta, user_id, delta),
+        ).fetchone()
+        if row is None:
+            exists = self.conn.execute(
+                self._format_query("SELECT 1 FROM site_users WHERE id = {}"),
+                (user_id,),
+            ).fetchone()
+            if exists is None:
+                raise KeyError(user_id)
+            raise ValueError("Insufficient points.")
+        self.conn.execute(
+            self._format_query(
+                """
+                INSERT INTO site_point_ledger(id, user_id, delta, kind, note, task_id)
+                VALUES ({}, {}, {}, {}, {}, {})
+                """
+            ),
+            (self.next_id("ptx"), user_id, delta, kind, note, task_id),
         )
-        self._execute(
-            """
-            UPDATE site_payment_orders
-            SET status = 'paid',
-                transaction_id = {},
-                paid_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE out_trade_no = {}
-            """,
-            (transaction_id, out_trade_no),
-        )
-        return user, True
+        return self._row_dict(row)
+
+    def _run_atomic(self, operation: Callable[[], T]) -> T:
+        if self.backend == "postgres":
+            with self.conn.transaction():
+                return operation()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            result = operation()
+            self.conn.commit()
+            return result
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def mark_payment_order_status(
         self,
@@ -384,20 +574,74 @@ class ASRSiteStore:
         row = self._fetchone("SELECT * FROM site_asr_tasks WHERE media_id = {}", (media_id,))
         return task_row(self._row_dict(row)) if row else None
 
-    def list_user_tasks(self, user_id: str) -> list[dict[str, Any]]:
+    def list_user_tasks(
+        self,
+        user_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be greater than 0.")
+        if offset < 0:
+            raise ValueError("offset must be greater than or equal to 0.")
+
+        params: list[Any] = [user_id]
+        pagination = ""
+        if limit is not None:
+            pagination = " LIMIT {} OFFSET {}"
+            params.extend((limit, offset))
+        elif offset:
+            pagination = " OFFSET {}" if self.backend == "postgres" else " LIMIT -1 OFFSET {}"
+            params.append(offset)
+
+        task_columns = ", ".join(f"t.{column} AS {column}" for column in TASK_SUMMARY_COLUMNS)
+        media_columns = ", ".join(
+            f"m.{column} AS media_summary_{column}" for column in MEDIA_SUMMARY_COLUMNS
+        )
         rows = self._fetchall(
             f"""
-            SELECT * FROM site_asr_tasks
-            WHERE user_id = {{}}
-            ORDER BY created_at DESC{self._secondary_order()}
+            SELECT {task_columns}, {media_columns}
+            FROM site_asr_tasks AS t
+            LEFT JOIN media_records AS m ON m.id = t.media_id
+            WHERE t.user_id = {{}}
+            ORDER BY t.created_at DESC, t.id DESC{pagination}
+            """,
+            tuple(params),
+        )
+        return [task_summary_with_media_row(self._row_dict(row)) for row in rows]
+
+    def list_user_task_statuses(self, user_id: str) -> list[dict[str, Any]]:
+        rows = self._fetchall(
+            """
+            SELECT id, status, updated_at, error
+            FROM site_asr_tasks
+            WHERE user_id = {}
+            ORDER BY created_at DESC, id DESC
             """,
             (user_id,),
         )
-        return [task_summary_row(self._row_dict(row)) for row in rows]
+        statuses: list[dict[str, Any]] = []
+        for row in rows:
+            row_dict = self._row_dict(row)
+            statuses.append(
+                {
+                    "id": row_dict["id"],
+                    "status": row_dict["status"],
+                    "updated_at": stringify_time(row_dict["updated_at"]),
+                    "error": row_dict["error"],
+                }
+            )
+        return statuses
 
     def list_tasks(self) -> list[dict[str, Any]]:
+        task_columns = ", ".join(f"t.{column} AS {column}" for column in TASK_SUMMARY_COLUMNS)
         rows = self._fetchall(
-            f"SELECT * FROM site_asr_tasks ORDER BY created_at DESC{self._secondary_order()}"
+            f"""
+            SELECT {task_columns}
+            FROM site_asr_tasks AS t
+            ORDER BY t.created_at DESC, t.id DESC
+            """
         )
         return [task_summary_row(self._row_dict(row)) for row in rows]
 
@@ -421,6 +665,10 @@ class ASRSiteStore:
             """
             UPDATE site_asr_tasks
             SET status = {},
+                completed_at = CASE
+                    WHEN {} = 'completed' THEN COALESCE(completed_at, CURRENT_TIMESTAMP)
+                    ELSE completed_at
+                END,
                 error = {},
                 editable_utterances = COALESCE({}, editable_utterances),
                 local_file_path = COALESCE({}, local_file_path),
@@ -428,6 +676,7 @@ class ASRSiteStore:
             WHERE id = {}
             """,
             (
+                status,
                 status,
                 error,
                 self._json_param(editable_utterances) if editable_utterances is not None else None,
@@ -470,6 +719,206 @@ class ASRSiteStore:
         )
         return self.get_task(task_id)
 
+    def mark_task_starting_with_points(
+        self,
+        task_id: str,
+        user_id: str,
+        *,
+        notify_on_complete: bool = False,
+        notification_template_id: str = "",
+    ) -> dict[str, Any]:
+        """Atomically charge the task owner and move an uploaded task to starting."""
+
+        notification_template_id = notification_template_id.strip()
+        notification_enabled = bool(notify_on_complete and notification_template_id)
+
+        def charge_and_start() -> dict[str, Any]:
+            lock_clause = " FOR UPDATE" if self.backend == "postgres" else ""
+            task_row_value = self.conn.execute(
+                self._format_query("SELECT * FROM site_asr_tasks WHERE id = {}" + lock_clause),
+                (task_id,),
+            ).fetchone()
+            if task_row_value is None:
+                raise KeyError(task_id)
+            task = task_row(self._row_dict(task_row_value))
+            if task["user_id"] != user_id:
+                raise KeyError(task_id)
+            if task["status"] != "uploaded":
+                raise ValueError(f"Task status {task['status']} cannot be started.")
+
+            user_row = self.conn.execute(
+                self._format_query("SELECT * FROM site_users WHERE id = {}" + lock_clause),
+                (user_id,),
+            ).fetchone()
+            if user_row is None:
+                raise KeyError(user_id)
+            user = self._row_dict(user_row)
+            points_cost = int(task["points_cost"])
+            points_balance = int(user["points_balance"])
+            if points_balance < points_cost:
+                raise ValueError(
+                    f"点数不足：本次需要 {points_cost} 点，当前余额 {points_balance} 点。"
+                )
+
+            self._apply_points_without_commit(
+                user_id=user_id,
+                delta=-points_cost,
+                kind="consume",
+                note="confirmed asr task",
+                task_id=task_id,
+            )
+            updated = self.conn.execute(
+                self._format_query(
+                    """
+                    UPDATE site_asr_tasks
+                    SET status = 'starting',
+                        notify_on_complete = {},
+                        notification_template_id = {},
+                        notification_job_id = NULL,
+                        notification_status = {},
+                        notification_attempts = 0,
+                        notification_last_error = NULL,
+                        notification_sent_at = NULL,
+                        confirmed_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = {} AND status = 'uploaded'
+                    RETURNING *
+                    """
+                ),
+                (
+                    notification_enabled,
+                    notification_template_id if notification_enabled else "",
+                    "pending" if notification_enabled else "disabled",
+                    task_id,
+                ),
+            ).fetchone()
+            if updated is None:
+                raise ValueError("Task status changed while starting.")
+            return task_row(self._row_dict(updated))
+
+        return self._run_atomic(charge_and_start)
+
+    def enqueue_task_notification(self, task_id: str) -> str | None:
+        """Atomically add one notification job for a completed pending task."""
+
+        def enqueue() -> str | None:
+            lock_clause = " FOR UPDATE" if self.backend == "postgres" else ""
+            row = self.conn.execute(
+                self._format_query("SELECT * FROM site_asr_tasks WHERE id = {}" + lock_clause),
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            task = task_row(self._row_dict(row))
+            if (
+                task["status"] != "completed"
+                or task["notification_status"] != "pending"
+                or task["notification_job_id"]
+            ):
+                return None
+
+            notification_job_id = self.next_id("job")
+            self.conn.execute(
+                self._format_query(
+                    """
+                    INSERT INTO jobs(id, type, status, payload, record_id, error)
+                    VALUES ({}, 'send_site_notification', 'pending', {}, NULL, NULL)
+                    """
+                ),
+                (notification_job_id, self._json_param({"task_id": task_id})),
+            )
+            self.conn.execute(
+                self._format_query(
+                    """
+                    UPDATE site_asr_tasks
+                    SET notification_job_id = {}, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = {}
+                    """
+                ),
+                (notification_job_id, task_id),
+            )
+            return notification_job_id
+
+        return self._run_atomic(enqueue)
+
+    def enqueue_pending_task_notifications(self, limit: int = 100) -> list[str]:
+        rows = self._fetchall(
+            """
+            SELECT id
+            FROM site_asr_tasks
+            WHERE status = 'completed'
+              AND notification_status = 'pending'
+              AND notification_job_id IS NULL
+            ORDER BY updated_at, id
+            LIMIT {}
+            """,
+            (max(1, limit),),
+        )
+        job_ids = []
+        for row in rows:
+            job_id = self.enqueue_task_notification(self._row_dict(row)["id"])
+            if job_id:
+                job_ids.append(job_id)
+        return job_ids
+
+    def begin_task_notification(self, task_id: str) -> dict[str, Any] | None:
+        """Record a delivery attempt unless this notification was already finalized."""
+
+        def begin() -> dict[str, Any] | None:
+            lock_clause = " FOR UPDATE" if self.backend == "postgres" else ""
+            row = self.conn.execute(
+                self._format_query("SELECT * FROM site_asr_tasks WHERE id = {}" + lock_clause),
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            task = task_row(self._row_dict(row))
+            if task["status"] != "completed" or task["notification_status"] != "pending":
+                return None
+            updated = self.conn.execute(
+                self._format_query(
+                    """
+                    UPDATE site_asr_tasks
+                    SET notification_attempts = notification_attempts + 1,
+                        notification_last_error = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = {} AND notification_status = 'pending'
+                    RETURNING *
+                    """
+                ),
+                (task_id,),
+            ).fetchone()
+            return task_row(self._row_dict(updated)) if updated is not None else None
+
+        return self._run_atomic(begin)
+
+    def mark_task_notification_sent(self, task_id: str) -> dict[str, Any]:
+        self._execute(
+            """
+            UPDATE site_asr_tasks
+            SET notification_status = 'sent',
+                notification_last_error = NULL,
+                notification_sent_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = {} AND notification_status = 'pending'
+            """,
+            (task_id,),
+        )
+        return self.get_task(task_id)
+
+    def mark_task_notification_failed(self, task_id: str, error: str) -> dict[str, Any]:
+        self._execute(
+            """
+            UPDATE site_asr_tasks
+            SET notification_status = 'failed',
+                notification_last_error = {},
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = {} AND notification_status = 'pending'
+            """,
+            (error[:1000], task_id),
+        )
+        return self.get_task(task_id)
+
     def save_correction(
         self,
         task_id: str,
@@ -502,9 +951,35 @@ class ASRSiteStore:
         return self.get_task(task_id)
 
     def delete_task(self, task_id: str) -> dict[str, Any]:
-        task = self.get_task(task_id)
-        self._execute("DELETE FROM site_asr_tasks WHERE id = {}", (task_id,))
-        return task
+        task_columns = ", ".join(f"t.{column} AS {column}" for column in TASK_SUMMARY_COLUMNS)
+
+        def fetch_metadata_and_delete() -> dict[str, Any]:
+            row = self.conn.execute(
+                self._format_query(
+                    f"""
+                    SELECT {task_columns}, m.object_name AS object_name
+                    FROM site_asr_tasks AS t
+                    LEFT JOIN media_records AS m ON m.id = t.media_id
+                    WHERE t.id = {{}}
+                    """
+                ),
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(task_id)
+            deleted = self.conn.execute(
+                self._format_query("DELETE FROM site_asr_tasks WHERE id = {} RETURNING id"),
+                (task_id,),
+            ).fetchone()
+            if deleted is None:
+                raise KeyError(task_id)
+            row_dict = self._row_dict(row)
+            return {
+                **task_summary_row(row_dict),
+                "object_name": row_dict.get("object_name"),
+            }
+
+        return self._run_atomic(fetch_metadata_and_delete)
 
     def rename_task(self, task_id: str, title: str) -> dict[str, Any]:
         self._execute(
@@ -662,6 +1137,17 @@ class ASRSiteStore:
             )
             self.conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS site_user_agreements(
+                    user_id TEXT NOT NULL REFERENCES site_users(id) ON DELETE CASCADE,
+                    agreement_version TEXT NOT NULL,
+                    accepted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    client TEXT NOT NULL DEFAULT 'unknown',
+                    PRIMARY KEY(user_id, agreement_version)
+                )
+                """
+            )
+            self.conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS site_asr_tasks(
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -675,9 +1161,17 @@ class ASRSiteStore:
                     points_cost INTEGER NOT NULL,
                     charge_basis TEXT NOT NULL,
                     agreement_version TEXT NOT NULL,
+                    notify_on_complete BOOLEAN NOT NULL DEFAULT FALSE,
+                    notification_template_id TEXT NOT NULL DEFAULT '',
+                    notification_job_id TEXT,
+                    notification_status TEXT NOT NULL DEFAULT 'disabled',
+                    notification_attempts INTEGER NOT NULL DEFAULT 0,
+                    notification_last_error TEXT,
+                    notification_sent_at TIMESTAMPTZ,
                     editable_utterances JSONB NOT NULL DEFAULT '[]'::jsonb,
                     error TEXT,
                     confirmed_at TIMESTAMPTZ,
+                    completed_at TIMESTAMPTZ,
                     expires_at TIMESTAMPTZ NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -692,6 +1186,14 @@ class ASRSiteStore:
             self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0")
             self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS local_file_path TEXT")
             self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS local_expires_at TIMESTAMPTZ")
+            self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS notify_on_complete BOOLEAN NOT NULL DEFAULT FALSE")
+            self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS notification_template_id TEXT NOT NULL DEFAULT ''")
+            self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS notification_job_id TEXT")
+            self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS notification_status TEXT NOT NULL DEFAULT 'disabled'")
+            self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS notification_attempts INTEGER NOT NULL DEFAULT 0")
+            self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS notification_last_error TEXT")
+            self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS notification_sent_at TIMESTAMPTZ")
+            self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
             self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS editable_utterances JSONB NOT NULL DEFAULT '[]'::jsonb")
             self.conn.execute("ALTER TABLE site_asr_tasks ADD COLUMN IF NOT EXISTS raw_result JSONB DEFAULT '{}'::jsonb")
             self.conn.execute("UPDATE site_asr_tasks SET raw_result = '{}'::jsonb WHERE raw_result IS NULL")
@@ -739,6 +1241,13 @@ class ASRSiteStore:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     paid_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS site_user_agreements(
+                    user_id TEXT NOT NULL REFERENCES site_users(id) ON DELETE CASCADE,
+                    agreement_version TEXT NOT NULL,
+                    accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    client TEXT NOT NULL DEFAULT 'unknown',
+                    PRIMARY KEY(user_id, agreement_version)
+                );
                 CREATE TABLE IF NOT EXISTS site_asr_tasks(
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -752,9 +1261,17 @@ class ASRSiteStore:
                     points_cost INTEGER NOT NULL,
                     charge_basis TEXT NOT NULL,
                     agreement_version TEXT NOT NULL,
+                    notify_on_complete INTEGER NOT NULL DEFAULT 0,
+                    notification_template_id TEXT NOT NULL DEFAULT '',
+                    notification_job_id TEXT,
+                    notification_status TEXT NOT NULL DEFAULT 'disabled',
+                    notification_attempts INTEGER NOT NULL DEFAULT 0,
+                    notification_last_error TEXT,
+                    notification_sent_at TEXT,
                     editable_utterances TEXT NOT NULL DEFAULT '[]',
                     error TEXT,
                     confirmed_at TEXT,
+                    completed_at TEXT,
                     expires_at TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -769,9 +1286,54 @@ class ASRSiteStore:
             self._ensure_sqlite_column("site_asr_tasks", "duration_seconds", "REAL NOT NULL DEFAULT 0")
             self._ensure_sqlite_column("site_asr_tasks", "local_file_path", "TEXT")
             self._ensure_sqlite_column("site_asr_tasks", "local_expires_at", "TEXT")
+            self._ensure_sqlite_column("site_asr_tasks", "notify_on_complete", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_sqlite_column("site_asr_tasks", "notification_template_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_sqlite_column("site_asr_tasks", "notification_job_id", "TEXT")
+            self._ensure_sqlite_column("site_asr_tasks", "notification_status", "TEXT NOT NULL DEFAULT 'disabled'")
+            self._ensure_sqlite_column("site_asr_tasks", "notification_attempts", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_sqlite_column("site_asr_tasks", "notification_last_error", "TEXT")
+            self._ensure_sqlite_column("site_asr_tasks", "notification_sent_at", "TEXT")
+            self._ensure_sqlite_column("site_asr_tasks", "completed_at", "TEXT")
             self._ensure_sqlite_column("site_asr_tasks", "editable_utterances", "TEXT NOT NULL DEFAULT '[]'")
             self._ensure_sqlite_column("site_asr_tasks", "raw_result", "TEXT NOT NULL DEFAULT '{}'")
+        self._ensure_task_indexes()
+        self._ensure_agreement_indexes()
+        if self.backend == "sqlite":
             self.conn.commit()
+
+    def _ensure_task_indexes(self) -> None:
+        statements = (
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_asr_tasks_user_created
+            ON site_asr_tasks(user_id, created_at DESC, id DESC)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_asr_tasks_media_id
+            ON site_asr_tasks(media_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_asr_tasks_status_updated
+            ON site_asr_tasks(status, updated_at DESC)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_asr_tasks_expires_at
+            ON site_asr_tasks(expires_at)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_asr_tasks_local_expires_at
+            ON site_asr_tasks(local_expires_at)
+            """,
+        )
+        for statement in statements:
+            self.conn.execute(statement)
+
+    def _ensure_agreement_indexes(self) -> None:
+        self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_user_agreements_user_accepted
+            ON site_user_agreements(user_id, accepted_at DESC)
+            """
+        )
 
     def _ensure_sqlite_column(self, table: str, column: str, definition: str) -> None:
         columns = {
@@ -826,6 +1388,15 @@ def remove_local_file_if_exists(path: str | None) -> None:
         pass
 
 
+def user_agreement_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "user_id": row["user_id"],
+        "agreement_version": row["agreement_version"],
+        "accepted_at": stringify_time(row["accepted_at"]),
+        "client": row["client"],
+    }
+
+
 def task_row(row: dict[str, Any]) -> dict[str, Any]:
     stored_utterances = row.get("editable_utterances") if isinstance(row, dict) else row["editable_utterances"]
     if isinstance(stored_utterances, str):
@@ -844,9 +1415,17 @@ def task_row(row: dict[str, Any]) -> dict[str, Any]:
         "points_cost": row["points_cost"],
         "charge_basis": row["charge_basis"],
         "agreement_version": row["agreement_version"],
+        "notify_on_complete": bool(row["notify_on_complete"]),
+        "notification_template_id": row["notification_template_id"],
+        "notification_job_id": row["notification_job_id"],
+        "notification_status": row["notification_status"],
+        "notification_attempts": int(row["notification_attempts"] or 0),
+        "notification_last_error": row["notification_last_error"],
+        "notification_sent_at": stringify_time(row["notification_sent_at"]),
         "utterances": utterances,
         "error": row["error"],
         "confirmed_at": stringify_time(row["confirmed_at"]),
+        "completed_at": stringify_time(row["completed_at"]),
         "expires_at": stringify_time(row["expires_at"]),
         "created_at": stringify_time(row["created_at"]),
         "updated_at": stringify_time(row["updated_at"]),
@@ -873,8 +1452,16 @@ def task_summary_row(row: dict[str, Any]) -> dict[str, Any]:
         "points_cost": row["points_cost"],
         "charge_basis": row["charge_basis"],
         "agreement_version": row["agreement_version"],
+        "notify_on_complete": bool(row["notify_on_complete"]),
+        "notification_template_id": row["notification_template_id"],
+        "notification_job_id": row["notification_job_id"],
+        "notification_status": row["notification_status"],
+        "notification_attempts": int(row["notification_attempts"] or 0),
+        "notification_last_error": row["notification_last_error"],
+        "notification_sent_at": stringify_time(row["notification_sent_at"]),
         "error": row["error"],
         "confirmed_at": stringify_time(row["confirmed_at"]),
+        "completed_at": stringify_time(row["completed_at"]),
         "expires_at": stringify_time(row["expires_at"]),
         "created_at": stringify_time(row["created_at"]),
         "updated_at": stringify_time(row["updated_at"]),
@@ -884,6 +1471,27 @@ def task_summary_row(row: dict[str, Any]) -> dict[str, Any]:
         "local_expires_at": stringify_time(
             row.get("local_expires_at") if isinstance(row, dict) else row["local_expires_at"]
         ),
+    }
+
+
+def task_summary_with_media_row(row: dict[str, Any]) -> dict[str, Any]:
+    task = task_summary_row(row)
+    media_id = row.get("media_summary_id")
+    if not media_id:
+        return {**task, "media": None}
+    return {
+        **task,
+        "media": {
+            "id": media_id,
+            "source_name": row.get("media_summary_source_name"),
+            "stored_name": row.get("media_summary_stored_name"),
+            "url": row.get("media_summary_url"),
+            "public_url": row.get("media_summary_public_url"),
+            "content_type": row.get("media_summary_content_type"),
+            "status": row.get("media_summary_status"),
+            "created_at": stringify_time(row.get("media_summary_created_at")),
+            "updated_at": stringify_time(row.get("media_summary_updated_at")),
+        },
     }
 
 

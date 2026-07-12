@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import ssl
 import subprocess
 import tempfile
 import time
 from http.client import RemoteDisconnected
 from pathlib import Path
+from typing import Callable
 from urllib.error import URLError
 from urllib.request import Request
 
@@ -29,6 +32,11 @@ from recordflow_agent.pipeline import process_record
 from recordflow_agent.profiles import load_profile
 from recordflow_agent.repository_factory import create_repository
 from recordflow_agent.sqlite_repository import SQLiteRepository
+from recordflow_agent.wechat_subscribe import send_task_complete_subscription
+
+
+LOGGER = logging.getLogger(__name__)
+QUEUE_MAINTENANCE_INTERVAL_SECONDS = 300.0
 
 
 class SiteTaskExpiredError(RuntimeError):
@@ -47,11 +55,32 @@ def process_next_job(repo: object, job_types: set[str] | None = None) -> bool:
             process_site_task_prepare_job(repo, job)
         elif job["type"] == "transcribe_media":
             process_media_transcription_job(repo, job)
+        elif job["type"] == "send_site_notification":
+            process_site_notification_job(repo, job)
         elif job["type"] == "cleanup_expired_media":
             process_cleanup_expired_media_job(repo, job)
         else:
             process_record_job(repo, job)
     except Exception as exc:
+        if job["type"] == "send_site_notification":
+            task_id = payload.get("task_id")
+            if task_id:
+                try:
+                    with open_site_store_if_available(repo) as store:
+                        if store is not None:
+                            store.mark_task_notification_failed(task_id, str(exc))
+                except Exception:
+                    LOGGER.exception(
+                        "Could not persist notification failure for task %s.",
+                        task_id,
+                    )
+            repo.fail_job(job["id"], str(exc))
+            LOGGER.warning(
+                "Completion subscription failed for task %s.",
+                task_id,
+                exc_info=True,
+            )
+            return True
         repo.fail_job(job["id"], str(exc))
         media_id = payload.get("media_id")
         if media_id:
@@ -81,6 +110,39 @@ def process_record_job(repo: object, job: dict) -> None:
         digest_renderer=build_digest_renderer(bool(payload.get("use_llm"))),
     )
     repo.complete_job(job["id"], digest.record_id)
+
+
+def process_site_notification_job(repo: object, job: dict) -> None:
+    task_id = job["payload"]["task_id"]
+    store = ASRSiteStore(repo)
+    try:
+        try:
+            task = store.begin_task_notification(task_id)
+        except KeyError:
+            task = None
+        if task is None:
+            repo.complete_job(job["id"], task_id)
+            return
+        appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
+        openid = store.get_user_wechat_openid(task["user_id"], appid)
+    finally:
+        store.close()
+
+    if not openid:
+        raise RuntimeError("No WeChat openid is available for the task owner.")
+    if not send_task_complete_subscription(openid=openid, task=task):
+        raise RuntimeError("WeChat task completion subscriptions are disabled.")
+
+    store = ASRSiteStore(repo)
+    try:
+        try:
+            store.mark_task_notification_sent(task_id)
+        except KeyError:
+            pass
+    finally:
+        store.close()
+    repo.complete_job(job["id"], task_id)
+    LOGGER.info("Completion subscription sent for task %s.", task_id)
 
 
 def process_media_compression_job(repo: object, job: dict) -> None:
@@ -175,9 +237,13 @@ def process_media_transcription_job(repo: object, job: dict) -> None:
     workspace = repo.workspaces[payload["workspace_id"]]
     media = repo.get_media_record(payload["media_id"])
     repo.update_media_status(media["id"], "transcribing")
+    is_site_media = False
     with open_site_store_if_available(repo) as store:
         if store is not None:
-            store.update_task_status_by_media_id(media["id"], "transcribing")
+            site_task = store.get_task_by_media_id(media["id"])
+            if site_task is not None:
+                is_site_media = True
+                store.update_task_status(site_task["id"], "transcribing")
     asr_client = StepFunASRClient.from_env()
     filename = media["stored_name"]
     content_type = media["content_type"]
@@ -217,12 +283,27 @@ def process_media_transcription_job(repo: object, job: dict) -> None:
     )
     with open_site_store_if_available(repo) as store:
         if store is not None:
-            store.update_task_status_by_media_id(
+            updated_site_task = store.update_task_status_by_media_id(
                 media["id"],
                 "completed",
                 transcript_text=result["text"],
                 raw_result=raw_asr_result,
             )
+            is_site_media = is_site_media or updated_site_task is not None
+            if updated_site_task is not None:
+                try:
+                    store.enqueue_task_notification(updated_site_task["id"])
+                except Exception:
+                    LOGGER.warning(
+                        "Could not enqueue completion subscription for task %s; "
+                        "the recovery scan will retry.",
+                        updated_site_task["id"],
+                        exc_info=True,
+                    )
+    if is_site_media:
+        repo.update_media_status(media["id"], "processed")
+        repo.complete_job(job["id"], media["id"])
+        return
     profile = load_profile(workspace.profile)
     digest = process_record(
         repo=repo,
@@ -357,16 +438,47 @@ def run_worker(
     repo: object,
     once: bool = False,
     poll_seconds: float = 1.0,
+    max_poll_seconds: float = 4.0,
     job_types: set[str] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> None:
     if hasattr(repo, "requeue_stale_running_jobs"):
         repo.requeue_stale_running_jobs()
+    recover_pending_site_notifications(repo)
+    last_queue_maintenance = time.monotonic()
+    sleep_fn = sleep or time.sleep
+    initial_poll_seconds = max(0.0, poll_seconds)
+    maximum_poll_seconds = max(initial_poll_seconds, max_poll_seconds)
+    idle_poll_seconds = initial_poll_seconds
     while True:
+        now = time.monotonic()
+        if now - last_queue_maintenance >= QUEUE_MAINTENANCE_INTERVAL_SECONDS:
+            if hasattr(repo, "requeue_stale_running_jobs"):
+                repo.requeue_stale_running_jobs()
+            recover_pending_site_notifications(repo)
+            last_queue_maintenance = now
         processed = process_next_job(repo, job_types=job_types)
         if once:
             return
-        if not processed:
-            time.sleep(poll_seconds)
+        if processed:
+            idle_poll_seconds = initial_poll_seconds
+            continue
+        sleep_fn(idle_poll_seconds)
+        idle_poll_seconds = min(
+            maximum_poll_seconds,
+            max(initial_poll_seconds, idle_poll_seconds * 2.0),
+        )
+
+
+def recover_pending_site_notifications(repo: object) -> int:
+    try:
+        with open_site_store_if_available(repo) as store:
+            if store is None:
+                return 0
+            return len(store.enqueue_pending_task_notifications())
+    except Exception:
+        LOGGER.warning("Could not recover pending completion subscriptions.", exc_info=True)
+        return 0
 
 
 class _NullContext:
@@ -405,7 +517,18 @@ def main() -> None:
         help="Use a SQLite database path. Ignored when omitted and DATABASE_URL is set.",
     )
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--poll-seconds", type=float, default=1.0)
+    parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=1.0,
+        help="Initial delay between empty queue polls.",
+    )
+    parser.add_argument(
+        "--max-poll-seconds",
+        type=float,
+        default=4.0,
+        help="Maximum delay after repeated empty queue polls.",
+    )
     parser.add_argument(
         "--types",
         default="",
@@ -416,7 +539,13 @@ def main() -> None:
 
     repo = SQLiteRepository(args.db_path) if args.db_path else create_repository()
     try:
-        run_worker(repo=repo, once=args.once, poll_seconds=args.poll_seconds, job_types=job_types)
+        run_worker(
+            repo=repo,
+            once=args.once,
+            poll_seconds=args.poll_seconds,
+            max_poll_seconds=args.max_poll_seconds,
+            job_types=job_types,
+        )
     finally:
         repo.close()
 

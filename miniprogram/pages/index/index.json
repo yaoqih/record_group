@@ -1,3 +1,8 @@
 {
-  "navigationBarTitleText": "上传录音"
+  "navigationBarTitleText": "上传录音",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark",
+  "usingComponents": {
+    "t-progress": "tdesign-miniprogram/progress/progress"
+  }
 }

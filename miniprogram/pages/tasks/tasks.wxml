@@ -1,50 +1,40 @@
 <view class="page tasks-page">
   <view class="page-header tasks-header">
     <view class="row">
-      <view class="row-main">
-        <view class="eyebrow">Tasks</view>
-        <view class="page-title">任务</view>
-        <view class="page-subtitle">{{headerSubtitle}}</view>
-      </view>
-      <t-button theme="light" size="small" loading="{{loading}}" disabled="{{loading}}" bind:tap="loadTasks">刷新</t-button>
+      <view class="row-main"><view class="eyebrow">RECORDFLOW</view><view class="page-title">我的任务</view><view class="page-subtitle">{{headerSubtitle}}</view></view>
+      <t-button theme="light" size="small" icon="refresh" loading="{{loading}}" disabled="{{loading}}" bind:tap="loadTasks">刷新</t-button>
     </view>
   </view>
 
-  <view wx:if="{{!hasSession}}" class="panel">
-    <t-empty class="empty-panel" icon="login" description="请先登录后查看任务">
-      <t-button slot="action" class="empty-action" theme="primary" size="small" bind:tap="goLogin">去登录</t-button>
-    </t-empty>
+  <view wx:if="{{hasSession && taskCount > 0}}" class="overview-card">
+    <view class="overview-item"><view class="overview-number">{{taskCount}}</view><view class="overview-label">全部任务</view></view>
+    <view class="overview-divider"></view>
+    <view class="overview-item"><view class="overview-number accent">{{processingCount}}</view><view class="overview-label">进行中</view></view>
+    <view class="overview-divider"></view>
+    <view class="overview-item"><view class="overview-number">{{completedCount}}</view><view class="overview-label">已完成</view></view>
   </view>
 
-  <view wx:elif="{{isEmpty}}" class="panel">
-    <t-empty class="empty-panel" icon="task" description="暂无任务">
-      <t-button slot="action" class="empty-action" theme="primary" size="small" bind:tap="goLogin">上传文件</t-button>
-    </t-empty>
-  </view>
+  <scroll-view wx:if="{{hasSession && taskCount > 0}}" class="filter-scroll" scroll-x enhanced show-scrollbar="{{false}}">
+    <view class="filter-row">
+      <t-button wx:for="{{filters}}" wx:key="key" theme="{{activeFilter == item.key ? 'primary' : 'default'}}" variant="{{activeFilter == item.key ? 'base' : 'outline'}}" size="small" data-filter="{{item.key}}" bind:tap="changeFilter">{{item.label}}<text wx:if="{{item.count > 0}}"> {{item.count}}</text></t-button>
+    </view>
+  </scroll-view>
+
+  <view wx:if="{{loading && !hasLoaded}}" class="loading-card"><t-icon name="loading" size="42rpx" color="#08705d" /><text>正在同步任务…</text></view>
+  <view wx:elif="{{!hasSession}}" class="panel empty-card"><t-empty class="empty-panel" icon="login" description="登录后，任务会在这里集中管理"><t-button slot="action" class="empty-action" theme="primary" size="small" bind:tap="goLogin">去登录</t-button></t-empty></view>
+  <view wx:elif="{{isEmpty}}" class="panel empty-card"><t-empty class="empty-panel" icon="task" description="还没有任务，先上传一段录音吧"><t-button slot="action" class="empty-action" theme="primary" size="small" bind:tap="goLogin">上传录音</t-button></t-empty></view>
+  <view wx:elif="{{filteredTasks.length == 0}}" class="panel empty-card"><t-empty class="empty-panel" description="该分类下暂无任务" /></view>
 
   <view wx:else class="task-list">
-    <view
-      wx:for="{{tasks}}"
-      wx:key="id"
-      class="task-row"
-      data-id="{{item.id}}"
-      bindtap="openTask"
-    >
-      <view class="task-row-main">
-        <view class="task-row-top">
-          <view class="task-title">{{item.displayTitle}}</view>
-          <t-tag theme="{{item.statusTheme}}" variant="light">{{item.statusLabel}}</t-tag>
-        </view>
-        <view class="task-meta">
-          <view>{{item.durationText}}</view>
-          <view>{{item.pointsText}}</view>
-          <view>{{item.createdText}}</view>
-        </view>
+    <view wx:for="{{filteredTasks}}" wx:key="id" class="task-card" data-id="{{item.id}}" bindtap="openTask">
+      <view class="task-accent task-accent-{{item.statusGroup}}"></view>
+      <view class="task-card-body">
+        <view class="task-row-top"><view class="task-title">{{item.displayTitle}}</view><t-tag theme="{{item.statusTheme}}" variant="light">{{item.statusLabel}}</t-tag></view>
+        <view class="task-info"><view><t-icon name="time" size="25rpx" color="#82908c" />{{item.durationText}}</view><view><t-icon name="money" size="25rpx" color="#82908c" />{{item.pointsText}}</view></view>
+        <view class="task-footer"><view class="created-text">{{item.createdText}}</view><view class="open-hint">{{item.actionText}}<t-icon name="arrow-right" size="28rpx" color="#08705d" /></view></view>
         <view wx:if="{{item.status == 'failed' && item.error}}" class="task-error">{{item.error}}</view>
       </view>
-      <t-icon name="arrow-right" size="34rpx" color="#94a3b8" />
     </view>
   </view>
-
   <view wx:if="{{error}}" class="error-box">{{error}}</view>
 </view>

@@ -1,126 +1,44 @@
 <view class="page task-page">
-  <view wx:if="{{audio && audio.public_url}}" class="player-bar">
-    <t-button class="player-button" size="small" theme="primary" icon="{{isPlaying ? 'pause-circle' : 'play-circle'}}" bind:tap="togglePlay">
-      {{isPlaying ? '暂停' : '播放'}}
-    </t-button>
-    <view class="player-main">
-      <view class="player-title">{{task.displayTitle}}</view>
-      <view class="player-time">{{currentTimeText}} / {{durationText}}</view>
-      <t-slider
-        wx:if="{{durationSeconds > 0}}"
-        class="player-slider"
-        theme="capsule"
-        min="{{0}}"
-        max="{{durationSeconds}}"
-        step="{{1}}"
-        value="{{progressValue}}"
-        bind:change="seekBySlider"
-      />
+  <view wx:if="{{loading && !task}}" class="detail-loading"><view class="loading-mark"><t-icon name="loading" size="48rpx" color="#08705d" /></view><view>正在读取任务详情…</view></view>
+  <view wx:if="{{task}}" class="detail-hero">
+    <view class="detail-status"><t-tag theme="{{task.statusTheme}}" variant="light">{{task.statusLabel}}</t-tag><view class="detail-date">{{task.createdText}}</view></view>
+    <view class="detail-title">{{task.displayTitle}}</view>
+    <view class="detail-stats"><view><text>{{task.durationText}}</text><label>音频时长</label></view><view><text>{{task.pointsText}}</text><label>转写费用</label></view><view><text>{{utterances.length}}</text><label>文本段落</label></view></view>
+  </view>
+
+  <view wx:if="{{audio && audio.public_url}}" class="player-card">
+    <view class="player-head"><view class="play-circle" bindtap="togglePlay"><t-icon name="{{isPlaying ? 'pause-circle' : 'play-circle'}}" size="42rpx" color="#ffffff" /></view><view class="player-copy"><view class="player-label">{{isPlaying ? '正在播放' : '点击播放录音'}}</view><view class="player-time">{{currentTimeText}} / {{durationText}}</view></view></view>
+    <t-slider wx:if="{{durationSeconds > 0}}" class="player-slider" theme="capsule" min="{{0}}" max="{{durationSeconds}}" step="{{1}}" value="{{progressValue}}" bind:change="seekBySlider" />
+  </view>
+
+  <view wx:if="{{canStart}}" class="confirm-card">
+    <view class="confirm-row"><view class="confirm-icon"><t-icon name="check-circle" size="40rpx" color="#08705d" /></view><view class="confirm-main"><view class="confirm-title">准备开始转写</view><view class="confirm-note">确认后扣除 {{task.pointsText}}，完成前无需停留此页。</view></view><t-button theme="primary" size="small" loading="{{starting}}" disabled="{{starting || loading}}" bind:tap="startTask">确认开始</t-button></view>
+    <view wx:if="{{notificationAvailable}}" class="notification-option"><t-checkbox class="notification-checkbox" block="{{true}}" borderless="{{true}}" icon="rectangle" label="完成后微信通知我" content="可离开页面，完成后发送一次服务通知" checked="{{notifyOnComplete}}" disabled="{{starting}}" bind:change="onNotifyChange" /></view>
+  </view>
+
+  <view wx:if="{{isProcessing}}" class="processing-card">
+    <view class="pulse-dot"></view><view class="confirm-main"><view class="confirm-title">{{task.statusLabel}}</view><view class="confirm-note">系统正在后台处理，页面将自动更新。</view></view><t-button theme="light" size="small" loading="{{loading}}" disabled="{{loading}}" bind:tap="loadTask">刷新</t-button>
+  </view>
+
+  <view wx:if="{{utterances.length > 0}}" class="transcript-section">
+    <view class="section-heading"><view><view class="section-title">转写文本</view><view class="section-note">点击句子，从对应位置播放</view></view><t-button theme="light" size="small" icon="download" disabled="{{isExporting}}" bind:tap="openExportMenu">导出</t-button></view>
+    <view class="transcript-card">
+      <view wx:for="{{utterances}}" wx:key="id" class="utterance" data-start="{{item.start_time}}" bindtap="seekUtterance">
+        <view class="utterance-line"><view class="speaker-avatar">{{item.speakerShort}}</view><view class="utterance-main"><view class="utterance-meta"><view class="speaker">{{item.speaker || '说话人'}}</view><view class="timecode">{{item.start_text}}</view></view><view class="utterance-text">{{item.text}}</view></view><t-icon name="play-circle" size="30rpx" color="#a1afab" /></view>
+      </view>
     </view>
   </view>
 
-  <view wx:if="{{task}}" class="page-header detail-header">
-    <view class="inline-status">
-      <view class="eyebrow">Task</view>
-      <t-tag theme="{{task.statusTheme}}" variant="light">{{task.statusLabel}}</t-tag>
-    </view>
-    <view class="page-title">{{task.displayTitle}}</view>
-    <view class="page-subtitle">{{task.summary}}</view>
-  </view>
+  <view wx:if="{{transcriptLoading && utterances.length == 0}}" class="transcript-loading"><t-icon name="loading" size="36rpx" color="#08705d" /><text>正在整理转写文本…</text></view>
 
-  <view wx:if="{{task}}" class="panel">
-    <view class="summary-grid">
-      <view class="summary-item">
-        <view class="summary-label">时长</view>
-        <view class="summary-value">{{task.durationText}}</view>
-      </view>
-      <view class="summary-item">
-        <view class="summary-label">费用</view>
-        <view class="summary-value">{{task.pointsText}}</view>
-      </view>
-      <view class="summary-item">
-        <view class="summary-label">创建时间</view>
-        <view class="summary-value">{{task.createdText}}</view>
-      </view>
-      <view class="summary-item">
-        <view class="summary-label">保留至</view>
-        <view class="summary-value">{{task.expiresText}}</view>
-      </view>
-    </view>
-    <view wx:if="{{task.error}}" class="error-box">{{task.error}}</view>
-  </view>
+  <view wx:if="{{showEmptyTranscript}}" class="panel"><t-empty class="empty-panel" description="暂无分句内容" /></view>
 
-  <view wx:if="{{canStart}}" class="panel action-panel">
-    <view class="panel-header">
-      <view class="panel-header-main">
-        <view class="panel-title">确认转写</view>
-        <view class="panel-note">本次将消耗 {{task.pointsText}}，确认后进入后台队列。</view>
-      </view>
-      <t-icon name="check-circle" size="40rpx" color="#0f766e" />
-    </view>
-    <t-button block theme="primary" icon="check-circle" loading="{{starting}}" disabled="{{starting || loading}}" bind:tap="startTask">确认扣点并开始</t-button>
+  <view wx:if="{{task}}" class="more-section">
+    <view class="more-title">任务信息</view>
+    <view class="info-card"><view class="info-row"><text>创建时间</text><text>{{task.createdText}}</text></view><view class="info-row"><text>保留至</text><text>{{task.expiresText}}</text></view><view class="info-row"><text>最近更新</text><text>{{task.updatedText}}</text></view><view wx:if="{{task.error}}" class="task-error-detail">{{task.error}}</view></view>
+    <view class="manage-actions"><t-button block theme="light" loading="{{loading}}" disabled="{{loading}}" bind:tap="loadTask">刷新任务</t-button><t-button block theme="danger" variant="outline" icon="delete" loading="{{deleting}}" disabled="{{deleting || starting || isProcessing || isExporting}}" bind:tap="deleteTask">{{isProcessing ? '处理完成后可删除' : '删除任务'}}</t-button></view>
   </view>
-
-  <view wx:if="{{isProcessing}}" class="panel action-panel">
-    <view class="panel-header">
-      <view class="panel-header-main">
-        <view class="panel-title">处理中</view>
-        <view class="panel-note">{{task.statusLabel}}，页面会自动刷新状态。</view>
-      </view>
-      <t-icon name="time" size="40rpx" color="#0f766e" />
-    </view>
-    <t-button block theme="light" loading="{{loading}}" disabled="{{loading}}" bind:tap="loadTask">刷新状态</t-button>
-  </view>
-
-  <view wx:if="{{utterances.length > 0}}" class="panel transcript-panel">
-    <view class="panel-header transcript-header">
-      <view class="panel-header-main">
-        <view class="panel-title">转写文本</view>
-        <view class="panel-note">点按任一句可从对应时间播放。</view>
-      </view>
-      <view class="export-actions">
-        <t-button theme="light" size="small" icon="file-export" data-format="srt" loading="{{exportingFormat == 'srt'}}" disabled="{{isExporting}}" bind:tap="exportTask">SRT</t-button>
-        <t-button theme="light" size="small" icon="file-txt" data-format="text" loading="{{exportingFormat == 'text'}}" disabled="{{isExporting}}" bind:tap="exportTask">TXT</t-button>
-        <t-button theme="light" size="small" icon="file-word" data-format="doc" loading="{{exportingFormat == 'doc'}}" disabled="{{isExporting}}" bind:tap="exportTask">Word</t-button>
-      </view>
-    </view>
-    <view wx:for="{{utterances}}" wx:key="id" class="utterance" data-start="{{item.start_time}}" bindtap="seekUtterance">
-      <view class="utterance-meta">
-        <view class="speaker">{{item.speaker || '说话人'}}</view>
-        <view class="timecode">{{item.start_text}}</view>
-      </view>
-      <view class="utterance-text">{{item.text}}</view>
-    </view>
-  </view>
-
-  <view wx:if="{{showEmptyTranscript}}" class="panel">
-    <t-empty class="empty-panel" description="暂无分句内容" />
-  </view>
-
-  <view wx:if="{{task}}" class="panel manage-panel">
-    <view class="panel-header">
-      <view class="panel-header-main">
-        <view class="panel-title">任务管理</view>
-        <view class="panel-note">最近更新 {{task.updatedText}}</view>
-      </view>
-    </view>
-    <view class="action-stack">
-      <t-button block theme="light" loading="{{loading}}" disabled="{{loading}}" bind:tap="loadTask">刷新详情</t-button>
-      <t-button block theme="danger" icon="delete" loading="{{deleting}}" disabled="{{deleting || starting || isExporting}}" bind:tap="deleteTask">删除任务</t-button>
-    </view>
-  </view>
-
   <view wx:if="{{error}}" class="error-box">{{error}}</view>
-
   <t-toast id="t-toast" />
-  <t-dialog
-    visible="{{deleteDialogVisible}}"
-    title="删除任务"
-    content="删除后无法恢复，确认继续？"
-    confirm-btn="{{deleteDialogConfirm}}"
-    cancel-btn="取消"
-    bind:confirm="confirmDeleteTask"
-    bind:cancel="closeDeleteDialog"
-    bind:close="closeDeleteDialog"
-  />
+  <t-dialog visible="{{deleteDialogVisible}}" title="删除任务" content="删除后无法恢复，确认继续？" confirm-btn="{{deleteDialogConfirm}}" cancel-btn="取消" bind:confirm="confirmDeleteTask" bind:cancel="closeDeleteDialog" bind:close="closeDeleteDialog" />
 </view>

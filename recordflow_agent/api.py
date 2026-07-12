@@ -12,6 +12,7 @@ import secrets
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -40,10 +41,12 @@ from recordflow_agent.asr_site import (
 from recordflow_agent.cli import build_digest_renderer, build_extractor
 from recordflow_agent.digest_engine import apply_digest_patch_json
 from recordflow_agent.eval_loader import load_eval_dataset
+from recordflow_agent.http_guard import RequestGuard, log_deprecated_query_token
 from recordflow_agent.llm_client import load_dotenv
 from recordflow_agent.media_storage import (
     B2ConfigurationError,
     B2UploadError,
+    delete_media_from_b2,
     is_supported_upload_media,
     upload_media_to_b2,
 )
@@ -52,6 +55,7 @@ from recordflow_agent.profiles import load_profile
 from recordflow_agent.repository_factory import create_repository
 from recordflow_agent.serialization import to_jsonable
 from recordflow_agent.web_ui import ADMIN_SITE_HTML, AGREEMENT_HTML, USER_SITE_HTML
+from recordflow_agent.wechat_subscribe import task_complete_subscription_config
 
 SITE_TASK_MAX_AUDIO_BYTES = 200 * 1024 * 1024
 SITE_TASK_AUDIO_MIME_TYPES = {
@@ -87,6 +91,7 @@ SITE_TASK_AUDIO_EXTENSIONS = {
     ".webm",
 }
 WECHATPAY_UNAVAILABLE_DETAIL = "微信支付暂不可用，请稍后再试。"
+SITE_TASK_ACTIVE_DELETE_STATUSES = frozenset({"starting", "queued", "transcribing"})
 LOGGER = logging.getLogger(__name__)
 
 
@@ -140,10 +145,19 @@ class CreateUserRequest(BaseModel):
 class WechatMiniappLoginRequest(BaseModel):
     code: str
     nickname: str | None = None
+    agreement_version: str = ""
+    agreement_accepted: bool = False
 
 
 class DevSiteLoginRequest(BaseModel):
     nickname: str = "开发用户"
+    agreement_version: str = ""
+    agreement_accepted: bool = False
+
+
+class AcceptSiteAgreementRequest(BaseModel):
+    agreement_version: str
+    agreement_accepted: bool = True
 
 
 class UpdateSiteProfileRequest(BaseModel):
@@ -152,6 +166,22 @@ class UpdateSiteProfileRequest(BaseModel):
 
 class RechargePointsRequest(BaseModel):
     points: int
+    note: str = ""
+
+
+class AdminCreateUserRequest(BaseModel):
+    name: str
+    role: str = "user"
+    initial_points: int = 0
+
+
+class AdminUpdateUserRequest(BaseModel):
+    name: str | None = None
+    role: str | None = None
+
+
+class AdminAdjustPointsRequest(BaseModel):
+    delta: int
     note: str = ""
 
 
@@ -169,6 +199,8 @@ class SaveCorrectionRequest(BaseModel):
 
 class StartTaskRequest(BaseModel):
     confirm_points: bool = True
+    notify_on_complete: bool = False
+    notification_template_id: str = ""
 
 
 class RenameTaskRequest(BaseModel):
@@ -204,20 +236,26 @@ class COSDirectUploadConfigurationError(RuntimeError):
 
 def create_app(repo: object | None = None) -> FastAPI:
     load_dotenv()
+    validate_site_session_configuration()
     app = FastAPI(title="RecordFlow Agent API", version="0.1.0")
     app.state.repo = repo or create_repository()
     app.state.frontend_dist = default_frontend_dist()
+    app.state.request_guard = RequestGuard.from_env()
 
     @app.middleware("http")
     async def api_key_auth(request: Request, call_next):
         configured_key = os.getenv("RECORDFLOW_APP_API_KEY")
         public_path_prefixes = ("/assets/",)
         site_session_prefixes = ("/site/auth/", "/site/me")
+        public_admin_shell = request.method == "GET" and (
+            request.url.path == "/admin" or request.url.path.startswith("/admin/")
+        )
         if (
             configured_key
-            and request.url.path not in {"/", "/health"}
+            and request.url.path not in {"/", "/health", "/agreement", "/site/agreement"}
             and not request.url.path.startswith(public_path_prefixes)
             and not request.url.path.startswith(site_session_prefixes)
+            and not public_admin_shell
         ):
             provided_key = request.headers.get("X-API-Key")
             if provided_key != configured_key:
@@ -226,6 +264,10 @@ def create_app(repo: object | None = None) -> FastAPI:
                     content={"detail": "Invalid or missing X-API-Key."},
                 )
         return await call_next(request)
+
+    @app.middleware("http")
+    async def request_guard(request: Request, call_next):
+        return await app.state.request_guard.handle(request, call_next)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -250,12 +292,33 @@ def create_app(repo: object | None = None) -> FastAPI:
         raise HTTPException(status_code=404, detail="Frontend asset not found.")
 
     @app.get("/admin", response_class=HTMLResponse)
-    def admin_page() -> str:
+    def admin_page():
+        frontend_index = app.state.frontend_dist / "index.html"
+        if frontend_index.exists():
+            return FileResponse(frontend_index)
+        return ADMIN_SITE_HTML
+
+    @app.get("/admin/{admin_path:path}", response_class=HTMLResponse)
+    def admin_spa_fallback(admin_path: str):
+        frontend_index = app.state.frontend_dist / "index.html"
+        if frontend_index.exists():
+            return FileResponse(frontend_index)
         return ADMIN_SITE_HTML
 
     @app.get("/agreement", response_class=HTMLResponse)
     def agreement_page() -> str:
         return AGREEMENT_HTML
+
+    @app.get("/site/agreement")
+    def site_agreement_metadata() -> dict:
+        return {
+            "agreement": {
+                "version": AGREEMENT_VERSION,
+                "title": "RecordFlow 用户协议与隐私说明",
+                "updated_at": "2026-07-11",
+                "url": "/agreement",
+            }
+        }
 
     @app.post("/workspaces")
     def create_workspace(request: CreateWorkspaceRequest) -> dict[str, str]:
@@ -441,6 +504,10 @@ def create_app(repo: object | None = None) -> FastAPI:
     def login_site_dev(request: DevSiteLoginRequest) -> dict:
         if os.getenv("RECORDFLOW_ENABLE_DEV_LOGIN", "1").lower() in {"0", "false", "no"}:
             raise HTTPException(status_code=404, detail="Dev login is disabled.")
+        agreement_version = validate_agreement_acceptance(
+            request.agreement_accepted,
+            request.agreement_version,
+        )
         name = request.nickname.strip() or "开发用户"
         signup_points = max(0, int(os.getenv("RECORDFLOW_MINIAPP_SIGNUP_POINTS", "100") or "100"))
         store = open_site_store(app.state.repo)
@@ -456,18 +523,32 @@ def create_app(repo: object | None = None) -> FastAPI:
                         kind="dev_signup_bonus",
                         note="miniapp dev login bonus",
                     )
+            agreement = (
+                store.accept_user_agreement(
+                    user["id"],
+                    agreement_version=agreement_version,
+                    client="wechat-miniapp-dev",
+                )
+                if agreement_version
+                else None
+            )
             token = create_site_session_token(user["id"])
             return {
                 "token": token,
                 "token_type": "Bearer",
                 "expires_in": site_session_ttl_seconds(),
                 "user": user,
+                "agreement": agreement,
             }
         finally:
             store.close()
 
     @app.post("/site/auth/wechat/login")
     def login_site_wechat(request: WechatMiniappLoginRequest) -> dict:
+        agreement_version = validate_agreement_acceptance(
+            request.agreement_accepted,
+            request.agreement_version,
+        )
         code = request.code.strip()
         if not code:
             raise HTTPException(status_code=400, detail="code is required.")
@@ -495,12 +576,22 @@ def create_app(repo: object | None = None) -> FastAPI:
                 default_name=(request.nickname or "").strip() or "微信用户",
                 signup_points=signup_points,
             )
+            agreement = (
+                store.accept_user_agreement(
+                    user["id"],
+                    agreement_version=agreement_version,
+                    client="wechat-miniapp",
+                )
+                if agreement_version
+                else None
+            )
             token = create_site_session_token(user["id"])
             return {
                 "token": token,
                 "token_type": "Bearer",
                 "expires_in": site_session_ttl_seconds(),
                 "user": user,
+                "agreement": agreement,
             }
         finally:
             store.close()
@@ -510,7 +601,31 @@ def create_app(repo: object | None = None) -> FastAPI:
         store = open_site_store(app.state.repo)
         try:
             user = require_site_session_user(request, store)
-            return {"user": user}
+            return {
+                "user": user,
+                "agreement": {
+                    "version": AGREEMENT_VERSION,
+                    "accepted": store.has_accepted_user_agreement(user["id"], AGREEMENT_VERSION),
+                },
+            }
+        finally:
+            store.close()
+
+    @app.post("/site/me/agreement")
+    def accept_site_me_agreement(request: Request, body: AcceptSiteAgreementRequest) -> dict:
+        agreement_version = validate_agreement_acceptance(
+            body.agreement_accepted,
+            body.agreement_version,
+        )
+        store = open_site_store(app.state.repo)
+        try:
+            user = require_site_session_user(request, store)
+            agreement = store.accept_user_agreement(
+                user["id"],
+                agreement_version=agreement_version,
+                client="wechat-miniapp",
+            )
+            return {"agreement": agreement}
         finally:
             store.close()
 
@@ -613,6 +728,18 @@ def create_app(repo: object | None = None) -> FastAPI:
         finally:
             store.close()
 
+    @app.get("/site/me/tasks/statuses")
+    def list_site_me_task_statuses(request: Request) -> dict:
+        """Return the minimum task state needed by polling clients."""
+        store = open_site_store(app.state.repo)
+        try:
+            user = require_site_session_user(request, store)
+            statuses = store.list_user_task_statuses(user["id"])
+            revision = max((str(item.get("updated_at") or "") for item in statuses), default="")
+            return {"statuses": statuses, "revision": revision}
+        finally:
+            store.close()
+
     @app.post("/site/me/tasks")
     async def submit_site_me_task(
         request: Request,
@@ -651,7 +778,10 @@ def create_app(repo: object | None = None) -> FastAPI:
         try:
             user = require_site_session_user(request, store)
             task = get_site_user_task_or_404(store, task_id, user["id"], detail=True)
-            return {"task": enrich_site_task(app.state.repo, task)}
+            return {
+                "task": enrich_site_task(app.state.repo, task),
+                "notification_config": task_complete_subscription_config(),
+            }
         finally:
             store.close()
 
@@ -679,7 +809,13 @@ def create_app(repo: object | None = None) -> FastAPI:
             get_site_user_task_or_404(store, task_id, user["id"])
         finally:
             store.close()
-        return start_site_task_for_user(task_id, body.confirm_points, required_user_id=user["id"])
+        return start_site_task_for_user(
+            task_id,
+            body.confirm_points,
+            notify_on_complete=body.notify_on_complete,
+            notification_template_id=body.notification_template_id,
+            required_user_id=user["id"],
+        )
 
     @app.patch("/site/me/tasks/{task_id}")
     def rename_site_me_task(request: Request, task_id: str, body: RenameTaskRequest) -> dict:
@@ -711,9 +847,8 @@ def create_app(repo: object | None = None) -> FastAPI:
         store = open_site_store(app.state.repo)
         try:
             user = require_site_session_user(request, store)
-            get_site_user_task_or_404(store, task_id, user["id"])
-            task = store.delete_task(task_id)
-            remove_local_file_if_exists(task.get("local_file_path"))
+            task = get_site_user_task_or_404(store, task_id, user["id"])
+            delete_site_task_with_resources(app.state.repo, store, task)
             return {"ok": True, "task_id": task_id}
         finally:
             store.close()
@@ -826,10 +961,10 @@ def create_app(repo: object | None = None) -> FastAPI:
         store = open_site_store(app.state.repo)
         try:
             try:
-                task = store.delete_task(task_id)
+                task = store.get_task(task_id)
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail="Task not found.") from exc
-            remove_local_file_if_exists(task.get("local_file_path"))
+            delete_site_task_with_resources(app.state.repo, store, task)
             return {"ok": True, "task_id": task_id}
         finally:
             store.close()
@@ -851,7 +986,82 @@ def create_app(repo: object | None = None) -> FastAPI:
 
     @app.post("/site/tasks/{task_id}/start")
     def start_site_task(task_id: str, request: StartTaskRequest) -> dict:
-        return start_site_task_for_user(task_id, request.confirm_points)
+        return start_site_task_for_user(
+            task_id,
+            request.confirm_points,
+            notify_on_complete=request.notify_on_complete,
+            notification_template_id=request.notification_template_id,
+        )
+
+    @app.get("/site/admin/meta")
+    def site_admin_meta() -> dict:
+        return {
+            "environment": recordflow_environment(),
+            "service_name": "RecordFlow",
+            "server_time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+
+    @app.post("/site/admin/users")
+    def create_site_admin_user(request: AdminCreateUserRequest) -> dict:
+        name = validate_admin_user_name(request.name)
+        role = validate_admin_user_role(request.role)
+        if request.initial_points < 0:
+            raise HTTPException(status_code=400, detail="initial_points must be greater than or equal to 0.")
+        store = open_site_store(app.state.repo)
+        try:
+            user = store.create_user(name, role=role)
+            if request.initial_points:
+                user = store.add_points(
+                    user["id"],
+                    delta=request.initial_points,
+                    kind="admin_adjustment_credit",
+                    note="initial points",
+                )
+            return {"user": user}
+        finally:
+            store.close()
+
+    @app.patch("/site/admin/users/{user_id}")
+    def update_site_admin_user(user_id: str, request: AdminUpdateUserRequest) -> dict:
+        if request.name is None and request.role is None:
+            raise HTTPException(status_code=400, detail="name or role is required.")
+        store = open_site_store(app.state.repo)
+        try:
+            try:
+                current = store.get_user(user_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="User not found.") from exc
+            name = current["name"] if request.name is None else validate_admin_user_name(request.name)
+            role = current["role"] if request.role is None else validate_admin_user_role(request.role)
+            try:
+                user = store.update_user(user_id, name=name, role=role)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="User not found.") from exc
+            return {"user": user}
+        finally:
+            store.close()
+
+    @app.post("/site/admin/users/{user_id}/points")
+    def adjust_site_admin_user_points(user_id: str, request: AdminAdjustPointsRequest) -> dict:
+        if request.delta == 0:
+            raise HTTPException(status_code=400, detail="delta must not be 0.")
+        kind = "admin_adjustment_credit" if request.delta > 0 else "admin_adjustment_debit"
+        store = open_site_store(app.state.repo)
+        try:
+            try:
+                user = store.add_points(
+                    user_id,
+                    delta=request.delta,
+                    kind=kind,
+                    note=request.note.strip() or "manual admin adjustment",
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="User not found.") from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"user": user}
+        finally:
+            store.close()
 
     @app.get("/site/admin/dashboard")
     def site_admin_dashboard() -> dict:
@@ -861,6 +1071,7 @@ def create_app(repo: object | None = None) -> FastAPI:
                 "users": store.list_users(),
                 "tasks": store.list_tasks(),
                 "point_ledger": store.list_point_ledger(),
+                "agreements": store.list_user_agreements(),
             }
         finally:
             store.close()
@@ -1066,16 +1277,27 @@ def create_app(repo: object | None = None) -> FastAPI:
     def start_site_task_for_user(
         task_id: str,
         confirm_points: bool,
+        notify_on_complete: bool = False,
+        notification_template_id: str = "",
         required_user_id: str | None = None,
     ) -> dict:
         if not confirm_points:
             raise HTTPException(status_code=400, detail="confirm_points must be true.")
 
+        resolved_template_id = ""
+        if notify_on_complete:
+            notification_config = task_complete_subscription_config()
+            if not notification_config["enabled"]:
+                raise HTTPException(status_code=503, detail="微信完成通知暂不可用。")
+            requested_template_id = notification_template_id.strip()
+            resolved_template_id = notification_config["template_id"]
+            if not requested_template_id or requested_template_id != resolved_template_id:
+                raise HTTPException(status_code=409, detail="通知模板已更新，请重新授权。")
+
         store = open_site_store(app.state.repo)
         try:
             try:
                 task = store.get_task(task_id)
-                user = store.get_user(task["user_id"])
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail="Task not found.") from exc
             if required_user_id and task["user_id"] != required_user_id:
@@ -1086,26 +1308,16 @@ def create_app(repo: object | None = None) -> FastAPI:
             if not local_file_path or not Path(local_file_path).exists():
                 store.update_task_status(task_id, "expired", error="Local upload expired before confirmation.")
                 raise HTTPException(status_code=410, detail="Local upload expired before confirmation.")
-            points_cost = int(task["points_cost"])
-            points_balance = int(user["points_balance"])
-            if points_balance < points_cost:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"点数不足：本次需要 {points_cost} 点，当前余额 {points_balance} 点。",
-                )
             try:
-                store.add_points(
-                    user["id"],
-                    delta=-points_cost,
-                    kind="consume",
-                    note="confirmed asr task",
-                    task_id=task_id,
+                task = store.mark_task_starting_with_points(
+                    task_id,
+                    task["user_id"],
+                    notify_on_complete=notify_on_complete,
+                    notification_template_id=resolved_template_id,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            store.mark_task_starting(task_id)
             job_id = app.state.repo.enqueue_site_task_prepare_job(task_id)
-            task = store.get_task(task_id)
             return {
                 "task": task_summary_only(task),
                 "job": app.state.repo.get_job(job_id),
@@ -1597,13 +1809,71 @@ def site_session_ttl_seconds() -> int:
     return max(60, int(os.getenv("RECORDFLOW_SITE_SESSION_TTL_SECONDS", "2592000") or "2592000"))
 
 
+def validate_agreement_acceptance(accepted: bool, agreement_version: str) -> str | None:
+    version = str(agreement_version or "").strip()
+    if not accepted and not version and not agreement_acceptance_required():
+        return None
+    if not accepted:
+        raise HTTPException(status_code=400, detail="请先阅读并同意用户协议与隐私说明。")
+    if version != AGREEMENT_VERSION:
+        raise HTTPException(
+            status_code=409,
+            detail=f"用户协议与隐私说明已更新，请阅读并同意 {AGREEMENT_VERSION} 版本。",
+        )
+    return version
+
+
+def agreement_acceptance_required() -> bool:
+    value = os.getenv("RECORDFLOW_REQUIRE_AGREEMENT", "true")
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def site_session_secret() -> str:
+    configured = os.getenv("RECORDFLOW_SESSION_SECRET", "").strip()
+    if configured:
+        return configured
+    if is_production_environment():
+        raise RuntimeError("RECORDFLOW_SESSION_SECRET is required in production.")
     return (
-        os.getenv("RECORDFLOW_SESSION_SECRET")
-        or os.getenv("SESSION_SECRET")
+        os.getenv("SESSION_SECRET")
         or os.getenv("RECORDFLOW_APP_API_KEY")
         or "recordflow-local-session-secret"
     )
+
+
+def validate_site_session_configuration() -> None:
+    if is_production_environment():
+        site_session_secret()
+        if not os.getenv("RECORDFLOW_APP_API_KEY", "").strip():
+            raise RuntimeError("RECORDFLOW_APP_API_KEY is required in production for admin APIs.")
+
+
+def recordflow_environment() -> str:
+    value = (
+        os.getenv("RECORDFLOW_ENV")
+        or os.getenv("ENVIRONMENT")
+        or os.getenv("APP_ENV")
+        or "development"
+    )
+    return value.strip().lower() or "development"
+
+
+def is_production_environment() -> bool:
+    return recordflow_environment() in {"production", "prod"}
+
+
+def validate_admin_user_name(name: str) -> str:
+    value = name.strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="User name is required.")
+    return value
+
+
+def validate_admin_user_role(role: str) -> str:
+    value = role.strip().lower()
+    if value not in {"user", "admin"}:
+        raise HTTPException(status_code=400, detail="role must be user or admin.")
+    return value
 
 
 def create_site_session_token(user_id: str) -> str:
@@ -1928,6 +2198,7 @@ def site_session_token_from_request(request: Request) -> str:
         return token
     token = request.query_params.get("site_token", "").strip()
     if token:
+        log_deprecated_query_token(request)
         return token
     raise HTTPException(status_code=401, detail="Missing site session token.")
 
@@ -1960,6 +2231,67 @@ def get_site_user_task_or_404(
     if task["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Task not found.")
     return task
+
+
+def delete_site_task_with_resources(
+    repo: object,
+    store: ASRSiteStore,
+    task: dict,
+) -> None:
+    task_id = task["id"]
+    try:
+        current_task = store.get_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Task not found.") from exc
+    if current_task["status"] in SITE_TASK_ACTIVE_DELETE_STATUSES:
+        raise HTTPException(status_code=409, detail="任务正在处理中，暂时无法删除。")
+
+    media_id = current_task.get("media_id")
+    media = None
+    if media_id:
+        try:
+            media = repo.get_media_record(media_id)
+        except KeyError:
+            media = None
+
+    local_file_path = current_task.get("local_file_path")
+    if local_file_path:
+        try:
+            Path(local_file_path).unlink(missing_ok=True)
+        except OSError as exc:
+            LOGGER.exception("Failed to delete local upload for site task %s", task_id)
+            raise HTTPException(
+                status_code=500,
+                detail="本地上传文件删除失败，任务未删除，请稍后重试。",
+            ) from exc
+
+    object_name = media.get("object_name") if media else None
+    if object_name:
+        try:
+            delete_media_from_b2(object_name)
+        except Exception as exc:
+            LOGGER.exception("Failed to delete stored media for site task %s", task_id)
+            raise HTTPException(
+                status_code=502,
+                detail="媒体文件删除失败，任务未删除，请稍后重试。",
+            ) from exc
+
+    try:
+        deleted_task = store.delete_task(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Task not found.") from exc
+    deleted_media_id = deleted_task.get("media_id") or media_id
+    if deleted_media_id:
+        try:
+            repo.delete_media_record(deleted_media_id)
+        except KeyError:
+            pass
+        except Exception as exc:
+            LOGGER.exception("Failed to delete media record for site task %s", task_id)
+            raise HTTPException(
+                status_code=500,
+                detail="任务记录已删除，但关联媒体数据清理失败，请联系管理员。",
+            ) from exc
 
 
 def probe_media_duration_seconds(file_path: Path) -> float:
@@ -2007,6 +2339,8 @@ def export_content_disposition(source_name: str, extension: str) -> str:
 
 
 def enrich_site_task(repo: object, task: dict) -> dict:
+    if "media" in task:
+        return task
     media_id = task.get("media_id")
     media = None
     if media_id and hasattr(repo, "get_media_record"):

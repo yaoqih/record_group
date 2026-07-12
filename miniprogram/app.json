@@ -3,16 +3,18 @@
     "pages/index/index",
     "pages/tasks/tasks",
     "pages/task/task",
+    "pages/agreement/agreement",
     "pages/mine/mine"
   ],
   "window": {
     "navigationBarTitleText": "RecordFlow",
-    "navigationBarBackgroundColor": "#f8fafc",
+    "navigationBarBackgroundColor": "#f4f7f6",
     "navigationBarTextStyle": "black",
-    "backgroundColor": "#f8fafc"
+    "backgroundColor": "#f4f7f6"
   },
   "usingComponents": {
     "t-button": "tdesign-miniprogram/button/button",
+    "t-checkbox": "tdesign-miniprogram/checkbox/checkbox",
     "t-input": "tdesign-miniprogram/input/input",
     "t-tag": "tdesign-miniprogram/tag/tag",
     "t-icon": "tdesign-miniprogram/icon/icon",
@@ -22,8 +24,8 @@
     "t-dialog": "tdesign-miniprogram/dialog/dialog"
   },
   "tabBar": {
-    "color": "#64748b",
-    "selectedColor": "#0f766e",
+    "color": "#64748B",
+    "selectedColor": "#0F766E",
     "backgroundColor": "#ffffff",
     "borderStyle": "black",
     "list": [
