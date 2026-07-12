@@ -1,63 +1,73 @@
 <view class="page upload-page">
-  <view class="page-header">
-    <view class="eyebrow">RecordFlow</view>
-    <view class="home-title-row">
-      <view class="page-title">录音转写</view>
-      <view wx:if="{{user}}" class="header-balance">
-        <view class="header-balance-value">{{user.points_balance}}</view>
-        <view class="header-balance-label">可用点数</view>
+  <view class="hero-card">
+    <view class="hero-glow"></view>
+    <view class="hero-top">
+      <view class="brand-mark"><t-icon name="audio" size="34rpx" color="#ffffff" /></view>
+      <view wx:if="{{user}}" class="balance-pill" bindtap="goMine">
+        <view><text class="balance-number">{{user.points_balance}}</text><text class="balance-unit"> 点</text></view>
+        <t-icon name="arrow-right" size="26rpx" color="#b9e8dc" />
       </view>
     </view>
-    <view class="page-subtitle">上传音频文件，确认扣点后生成可播放、可导出的转写文本。</view>
+    <view class="hero-kicker">RECORDFLOW</view>
+    <view class="hero-title">把声音，变成<br/>清晰可用的文字</view>
+    <view class="hero-subtitle">上传录音，自动转写、逐句回听并导出常用格式。</view>
   </view>
 
-  <view wx:if="{{!user}}" class="panel">
+  <view wx:if="{{!user}}" class="panel login-panel">
     <view class="panel-header">
-      <view class="panel-header-main">
-        <view class="panel-title">微信账号登录</view>
-        <view class="panel-note">登录后保存任务和点数余额。</view>
-      </view>
-      <t-icon name="login" size="40rpx" color="#0f766e" />
+      <view class="panel-header-main"><view class="panel-title">开始使用</view><view class="panel-note">登录后，任务与点数会安全同步。</view></view>
+      <view class="step-badge">1</view>
     </view>
-    <t-input class="field" value="{{nickname}}" bind:change="onNicknameInput" placeholder="昵称，可不填" />
-    <t-button block theme="primary" icon="login" loading="{{loading}}" disabled="{{loading || uploading}}" bind:tap="onLogin">微信登录</t-button>
+    <t-input class="field" value="{{nickname}}" bind:change="onNicknameInput" placeholder="设置昵称（可选）" />
+    <view class="agreement-consent">
+      <t-checkbox block="{{false}}" borderless="{{true}}" icon="rectangle" checked="{{agreementAccepted}}" bind:change="onAgreementChange" />
+      <view class="agreement-consent-copy" bindtap="toggleAgreementAcceptance">我已阅读并同意<text class="agreement-link" catchtap="openAgreement">《用户协议与隐私说明》</text></view>
+    </view>
+    <t-button block theme="primary" icon="logo-wechat" loading="{{loading}}" disabled="{{loading || uploading || !agreementAccepted}}" bind:tap="onLogin">微信快捷登录</t-button>
     <view wx:if="{{error}}" class="error-box">{{error}}</view>
   </view>
 
-  <view class="panel">
-    <view class="panel-header">
-      <view class="panel-header-main">
-        <view class="panel-title">选择文件</view>
-        <view class="panel-note">支持 mp3、m4a、wav、ogg、webm、flac 等音频，单个文件不超过 200MB。</view>
-      </view>
-      <t-icon name="upload" size="40rpx" color="#334155" />
-    </view>
-    <view class="action-stack">
-      <t-button block theme="primary" icon="audio" disabled="{{!user || uploading}}" loading="{{uploading}}" bind:tap="chooseMessageFile">选择音频文件</t-button>
-    </view>
-    <view wx:if="{{selectedName}}" class="selected-file">
-      <t-icon name="file" size="32rpx" color="#0f766e" />
-      <view class="selected-file-name">{{selectedName}}</view>
-    </view>
-    <view wx:if="{{user && error}}" class="error-box">{{error}}</view>
-  </view>
+  <view class="upload-card {{!user ? 'upload-card-disabled' : ''}}" bindtap="chooseMessageFile">
+    <view class="upload-icon"><t-icon name="upload" size="54rpx" color="#08705d" /></view>
+    <view class="upload-title">{{uploading ? '正在上传录音' : (uploadQueue.length ? '继续添加录音' : '选择录音文件')}}</view>
+    <view class="upload-copy">{{uploadSummary || '从微信聊天或本地文件中选择，可多选'}}</view>
+    <view class="format-row"><text>MP3</text><text>M4A</text><text>WAV</text><text>更多格式</text><text>≤ 200MB/个</text><text>最多 9 个</text></view>
 
-  <view wx:if="{{latestTask}}" class="panel latest-panel" bindtap="openLatestTask">
-    <view class="panel-header compact-header">
-      <view class="panel-header-main">
-        <view class="panel-title">最近上传</view>
-        <view class="panel-note">{{latestTask.actionNote}}</view>
+    <view wx:if="{{uploadQueue.length}}" class="upload-queue" catchtap="stopTap">
+      <view class="upload-queue-heading">
+        <view class="upload-queue-title">本次选择</view>
+        <view class="upload-queue-count">{{uploadQueue.length}} 个文件</view>
       </view>
-      <t-tag theme="{{latestTask.statusTheme}}" variant="light">{{latestTask.statusLabel}}</t-tag>
-    </view>
-    <view class="task-link">
-      <view class="task-link-main">
-        <view class="task-link-title">{{latestTask.displayTitle}}</view>
-        <view class="meta-line">{{latestTask.summary}}</view>
+      <view wx:for="{{uploadQueue}}" wx:key="id" class="upload-item">
+        <view class="upload-item-heading">
+          <view class="upload-item-icon"><t-icon name="audio" size="28rpx" color="#08705d" /></view>
+          <view class="upload-item-main">
+            <view class="upload-item-name">{{item.name}}</view>
+            <view class="upload-item-size">{{item.sizeLabel}}</view>
+          </view>
+          <view class="upload-item-status upload-item-status-{{item.status}}">{{item.statusLabel}}</view>
+        </view>
+        <t-progress class="upload-progress" percentage="{{item.progress}}" label="{{item.progressLabel}}" status="{{item.progressStatus}}" color="#08705d" trackColor="#e3ebe8" strokeWidth="{{6}}" />
+        <view wx:if="{{item.error}}" class="upload-item-error">{{item.error}}</view>
       </view>
-      <t-icon name="arrow-right" size="34rpx" color="#94a3b8" />
+      <view wx:if="{{!uploading}}" class="upload-queue-actions">
+        <t-button wx:if="{{retryableFailedCount}}" size="small" theme="primary" variant="outline" icon="refresh" bind:tap="retryFailedUploads">重试失败项</t-button>
+        <t-button wx:if="{{uploadCompleted}}" size="small" theme="primary" variant="text" icon="view-list" bind:tap="goTasks">查看任务</t-button>
+      </view>
     </view>
   </view>
 
+  <view wx:if="{{user && error}}" class="error-box page-error">{{error}}</view>
+
+  <view wx:if="{{latestTask}}" class="recent-section">
+    <view class="section-heading"><view><view class="section-title">继续处理</view><view class="section-note">最近上传的任务</view></view><view class="text-action" bindtap="goTasks">查看全部</view></view>
+    <view class="recent-card" bindtap="openLatestTask">
+      <view class="file-symbol"><t-icon name="audio" size="36rpx" color="#08705d" /></view>
+      <view class="recent-main"><view class="recent-title">{{latestTask.displayTitle}}</view><view class="meta-line">{{latestTask.summary}}</view></view>
+      <view class="recent-side"><t-tag theme="{{latestTask.statusTheme}}" variant="light">{{latestTask.statusLabel}}</t-tag><t-icon name="arrow-right" size="30rpx" color="#91a09c" /></view>
+    </view>
+  </view>
+
+  <view wx:if="{{user && !latestTask}}" class="tip-row"><t-icon name="info-circle" size="28rpx" color="#71817c" /><text>上传后会先预估时长和点数，由你确认后才开始转写。</text></view>
   <t-toast id="t-toast" />
 </view>

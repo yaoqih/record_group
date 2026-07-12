@@ -663,6 +663,14 @@ class PostgresRepository:
             raise KeyError(media_id)
         return media_record_from_row(row)
 
+    def delete_media_record(self, media_id: str) -> None:
+        deleted = self.conn.execute(
+            "DELETE FROM media_records WHERE id = %s RETURNING id",
+            (media_id,),
+        ).fetchone()
+        if deleted is None:
+            raise KeyError(media_id)
+
     def list_media_records(self, workspace_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT * FROM media_records WHERE workspace_id = %s ORDER BY created_order",

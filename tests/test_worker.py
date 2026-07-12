@@ -1,7 +1,39 @@
+import pytest
+
+from recordflow_agent import worker as worker_module
 from recordflow_agent.profiles import load_profile
 from recordflow_agent.asr_client import STEPFUN_MAX_AUDIO_DATA_BYTES
 from recordflow_agent.sqlite_repository import SQLiteRepository
-from recordflow_agent.worker import process_next_job, transcode_audio_to_ogg_opus
+from recordflow_agent.worker import process_next_job, run_worker, transcode_audio_to_ogg_opus
+
+
+def test_worker_backs_off_when_idle_and_resets_after_processing(monkeypatch):
+    poll_results = iter([False, False, False, False, True, False])
+    sleep_delays = []
+
+    class WorkerStopped(Exception):
+        pass
+
+    monkeypatch.setattr(
+        worker_module,
+        "process_next_job",
+        lambda repo, job_types=None: next(poll_results),
+    )
+
+    def fake_sleep(seconds):
+        sleep_delays.append(seconds)
+        if len(sleep_delays) == 5:
+            raise WorkerStopped
+
+    with pytest.raises(WorkerStopped):
+        run_worker(
+            repo=object(),
+            poll_seconds=1.0,
+            max_poll_seconds=4.0,
+            sleep=fake_sleep,
+        )
+
+    assert sleep_delays == [1.0, 2.0, 4.0, 4.0, 1.0]
 
 
 def test_worker_processes_queued_record_job_and_updates_state(tmp_path):

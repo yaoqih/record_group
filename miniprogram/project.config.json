@@ -3,6 +3,15 @@
   "projectname": "recordflow-miniapp",
   "compileType": "miniprogram",
   "miniprogramRoot": "./",
+  "packOptions": {
+    "ignore": [],
+    "include": [
+      {
+        "value": "assets/tabbar",
+        "type": "folder"
+      }
+    ]
+  },
   "setting": {
     "urlCheck": false,
     "es6": true,
@@ -10,6 +19,8 @@
     "packNpmManually": false,
     "packNpmRelationList": [],
     "postcss": true,
-    "minified": true
+    "minified": true,
+    "ignoreDevUnusedFiles": true,
+    "ignoreUploadUnusedFiles": true
   }
 }

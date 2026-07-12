@@ -618,6 +618,13 @@ class SQLiteRepository:
             raise KeyError(media_id)
         return media_record_from_row(row)
 
+    def delete_media_record(self, media_id: str) -> None:
+        with self.lock:
+            cursor = self.conn.execute("DELETE FROM media_records WHERE id = ?", (media_id,))
+            if cursor.rowcount == 0:
+                raise KeyError(media_id)
+            self.conn.commit()
+
     def list_media_records(self, workspace_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT * FROM media_records WHERE workspace_id = ? ORDER BY rowid",
