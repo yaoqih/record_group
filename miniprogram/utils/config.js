@@ -1,5 +1,5 @@
 // 可选值：'staging' 或 'production'。设为空字符串时按小程序版本自动选择。
-const API_ENV_OVERRIDE = ''
+const API_ENV_OVERRIDE = 'production'
 
 const API_BASES = {
   staging: 'https://test-record.blenet.top',
