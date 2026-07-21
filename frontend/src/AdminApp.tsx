@@ -13,7 +13,6 @@ import {
   Coins,
   Download,
   Edit3,
-  ExternalLink,
   Eye,
   EyeOff,
   FileAudio,
@@ -1238,7 +1237,6 @@ export default function AdminApp() {
           </div>
           <nav className="admin-topbar__actions" aria-label="全局操作">
             <span className="admin-refresh-time">更新于 {lastUpdated ? formatDateTime(lastUpdated.toISOString()) : '—'}</span>
-            <a className="admin-icon-button" href="/" target="_blank" rel="noreferrer" aria-label="打开用户端" title="打开用户端"><ExternalLink size={17} /></a>
             <button className="admin-icon-button" type="button" onClick={() => void refreshDashboard()} disabled={refreshing} aria-label="刷新数据" title="刷新数据">
               <RefreshCw className={refreshing ? 'admin-spin' : ''} size={17} />
             </button>

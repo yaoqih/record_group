@@ -4,9 +4,12 @@ import './index.css'
 import { isAdminPath } from './admin.ts'
 
 async function bootstrap() {
-  const appModule = isAdminPath(window.location.pathname)
-    ? await import('./AdminApp.tsx')
-    : await import('./App.tsx')
+  if (!isAdminPath(window.location.pathname)) {
+    window.location.replace('/admin')
+    return
+  }
+
+  const appModule = await import('./AdminApp.tsx')
   createRoot(document.getElementById('root')!).render(createElement(StrictMode, null, createElement(appModule.default)))
 }
 

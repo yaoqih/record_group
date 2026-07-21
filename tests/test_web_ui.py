@@ -4,7 +4,7 @@ from recordflow_agent.api import create_app
 from recordflow_agent.sqlite_repository import SQLiteRepository
 
 
-def test_user_admin_and_agreement_pages_are_exposed(tmp_path):
+def test_public_user_page_is_disabled_but_admin_and_agreement_are_exposed(tmp_path):
     app = create_app(SQLiteRepository(tmp_path / "recordflow.db"))
     client = TestClient(app)
 
@@ -12,8 +12,7 @@ def test_user_admin_and_agreement_pages_are_exposed(tmp_path):
     admin_response = client.get("/admin")
     agreement_response = client.get("/agreement")
 
-    assert user_response.status_code == 200
-    assert "<div id=\"root\"></div>" in user_response.text or "上传到服务器并创建任务" in user_response.text
+    assert user_response.status_code == 404
     assert admin_response.status_code == 200
     assert "<div id=\"root\"></div>" in admin_response.text or "ASR 管理端" in admin_response.text
     assert agreement_response.status_code == 200

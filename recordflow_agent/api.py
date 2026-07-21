@@ -54,7 +54,7 @@ from recordflow_agent.pipeline import process_record
 from recordflow_agent.profiles import load_profile
 from recordflow_agent.repository_factory import create_repository
 from recordflow_agent.serialization import to_jsonable
-from recordflow_agent.web_ui import ADMIN_SITE_HTML, AGREEMENT_HTML, USER_SITE_HTML
+from recordflow_agent.web_ui import ADMIN_SITE_HTML, AGREEMENT_HTML
 from recordflow_agent.wechat_subscribe import task_complete_subscription_config
 
 SITE_TASK_MAX_AUDIO_BYTES = 200 * 1024 * 1024
@@ -276,13 +276,6 @@ def create_app(repo: object | None = None) -> FastAPI:
     @app.get("/dashboard")
     def dashboard() -> dict:
         return build_dashboard(app.state.repo)
-
-    @app.get("/", response_class=HTMLResponse)
-    def index():
-        frontend_index = app.state.frontend_dist / "index.html"
-        if frontend_index.exists():
-            return FileResponse(frontend_index)
-        return USER_SITE_HTML
 
     @app.get("/assets/{asset_path:path}")
     def frontend_asset(asset_path: str):
