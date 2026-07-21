@@ -56,7 +56,7 @@ def test_health_endpoint(tmp_path):
     assert response.json() == {"status": "ok"}
 
 
-def test_api_serves_frontend_assets_when_directory_exists(tmp_path):
+def test_api_serves_admin_frontend_when_directory_exists(tmp_path):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     frontend_dir = tmp_path / "frontend_dist"
     frontend_dir.mkdir()
@@ -65,10 +65,27 @@ def test_api_serves_frontend_assets_when_directory_exists(tmp_path):
     app.state.frontend_dist = frontend_dir
     client = TestClient(app)
 
-    response = client.get("/")
+    response = client.get("/admin")
 
     assert response.status_code == 200
     assert "frontend ok" in response.text
+    repo.close()
+
+
+def test_api_does_not_serve_public_user_frontend(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    frontend_dir = tmp_path / "frontend_dist"
+    frontend_dir.mkdir()
+    (frontend_dir / "index.html").write_text("<!doctype html><html><body>frontend ok</body></html>", encoding="utf-8")
+    monkeypatch.setenv("RECORDFLOW_APP_API_KEY", "secret-key")
+    app = create_app(repo)
+    app.state.frontend_dist = frontend_dir
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 404
+    assert "frontend ok" not in response.text
     repo.close()
 
 

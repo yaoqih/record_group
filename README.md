@@ -46,15 +46,15 @@ Health check:
 curl http://localhost:8000/health
 ```
 
-Browser UI:
+The public browser test page is intentionally disabled. The browser UI is admin-only:
 
 ```text
-http://localhost:8000/
+http://localhost:8000/admin
 ```
 
 ## Frontend Dev
 
-The ASR website now supports a separated React + Vite frontend under `frontend/`.
+The management console uses a separated React + Vite frontend under `frontend/`.
 
 Development mode:
 
@@ -69,10 +69,10 @@ npm run dev
 Then open:
 
 ```text
-http://localhost:5173/
+http://localhost:5173/admin
 ```
 
-Vite proxies `/site`, `/health`, `/dashboard`, `/jobs`, `/workspaces`, `/state`, `/review`, `/agreement`, and `/admin` to the FastAPI backend on `127.0.0.1:8000`.
+Vite proxies the management API and supporting backend routes to FastAPI on `127.0.0.1:8000`.
 
 Production build served by FastAPI:
 
@@ -84,7 +84,7 @@ cd ..
 uvicorn recordflow_agent.api:app --host 0.0.0.0 --port 8000
 ```
 
-After `frontend/dist` exists, FastAPI serves the built frontend at `/` and its generated assets under `/assets/*`.
+After `frontend/dist` exists, FastAPI serves the built management frontend at `/admin` (including nested admin routes) and its generated assets under `/assets/*`. The root path `/` remains unavailable.
 
 ## WeChat Mini Program MVP
 
@@ -152,7 +152,7 @@ python3 -m recordflow_agent.cli \
 
 ## Optional App API Key
 
-Set `RECORDFLOW_APP_API_KEY` to protect API routes. `/` and `/health` remain public. API clients must send:
+Set `RECORDFLOW_APP_API_KEY` to protect API routes. `/health`, the agreement page, mini-program authentication/session routes, and the admin shell remain available as required by their clients. API clients must send:
 
 ```text
 X-API-Key: your-app-key
@@ -165,7 +165,7 @@ X-API-Key: your-app-key
 - In-memory repository for fast MVP testing.
 - SQLite repository for deployable backend persistence.
 - Postgres repository for shared API/worker persistence on Neon or similar hosts.
-- Minimal browser UI served by FastAPI.
+- Admin-only browser console served by FastAPI at `/admin`.
 - Optional API key authentication.
 - DB-backed async job queue and worker.
 - Deterministic top-down Record Digest engine with persisted digests and patchable sections.

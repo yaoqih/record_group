@@ -89,12 +89,16 @@ def process_next_job(repo: object, job_types: set[str] | None = None) -> bool:
             repo.update_media_status(media_id, "failed", error=str(exc))
             with open_site_store_if_available(repo) as store:
                 if store is not None:
-                    store.update_task_status_by_media_id(media_id, "failed", error=str(exc))
+                    store.fail_task_by_media_id_with_points_refund(media_id, str(exc))
         task_id = payload.get("task_id")
-        if task_id and not isinstance(exc, SiteTaskExpiredError):
+        if task_id:
             with open_site_store_if_available(repo) as store:
                 if store is not None:
-                    store.update_task_status(task_id, "failed", error=str(exc))
+                    store.fail_task_with_points_refund(
+                        task_id,
+                        str(exc),
+                        status="expired" if isinstance(exc, SiteTaskExpiredError) else "failed",
+                    )
     return True
 
 

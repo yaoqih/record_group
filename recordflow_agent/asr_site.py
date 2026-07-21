@@ -706,6 +706,81 @@ class ASRSiteStore:
             raw_result=raw_result,
         )
 
+    def fail_task_with_points_refund(
+        self,
+        task_id: str,
+        error: str,
+        *,
+        status: str = "failed",
+    ) -> dict[str, Any]:
+        """Atomically terminate a charged task and refund its consumed points once."""
+
+        if status not in {"failed", "expired"}:
+            raise ValueError(f"Task failure status {status} is not supported.")
+
+        def fail_and_refund() -> dict[str, Any]:
+            lock_clause = " FOR UPDATE" if self.backend == "postgres" else ""
+            task_row_value = self.conn.execute(
+                self._format_query("SELECT * FROM site_asr_tasks WHERE id = {}" + lock_clause),
+                (task_id,),
+            ).fetchone()
+            if task_row_value is None:
+                raise KeyError(task_id)
+            task = task_row(self._row_dict(task_row_value))
+
+            self.conn.execute(
+                self._format_query(
+                    """
+                    UPDATE site_asr_tasks
+                    SET status = {}, error = {}, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = {}
+                    """
+                ),
+                (status, error, task_id),
+            )
+
+            consume_entry = self.conn.execute(
+                self._format_query(
+                    """
+                    SELECT 1 FROM site_point_ledger
+                    WHERE task_id = {} AND kind = 'consume'
+                    LIMIT 1
+                    """
+                ),
+                (task_id,),
+            ).fetchone()
+            refund_entry = self.conn.execute(
+                self._format_query(
+                    """
+                    SELECT 1 FROM site_point_ledger
+                    WHERE task_id = {} AND kind = 'transcription_refund'
+                    LIMIT 1
+                    """
+                ),
+                (task_id,),
+            ).fetchone()
+            if consume_entry is not None and refund_entry is None:
+                self._apply_points_without_commit(
+                    user_id=task["user_id"],
+                    delta=int(task["points_cost"]),
+                    kind="transcription_refund",
+                    note="transcription failed",
+                    task_id=task_id,
+                )
+            return self.get_task(task_id)
+
+        return self._run_atomic(fail_and_refund)
+
+    def fail_task_by_media_id_with_points_refund(
+        self,
+        media_id: str,
+        error: str,
+    ) -> dict[str, Any] | None:
+        task = self.get_task_by_media_id(media_id)
+        if task is None:
+            return None
+        return self.fail_task_with_points_refund(task["id"], error)
+
     def mark_task_starting(self, task_id: str) -> dict[str, Any]:
         self._execute(
             """

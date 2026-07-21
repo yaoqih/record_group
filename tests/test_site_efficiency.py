@@ -96,6 +96,47 @@ def test_task_start_charges_points_once_when_repeated(tmp_path):
         repo.close()
 
 
+def test_failed_task_refunds_consumed_points_once(tmp_path):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    workspace_id = repo.create_workspace("ASR 网站", "detailed_summary")
+    store = ASRSiteStore(repo)
+    try:
+        user = store.create_user("Alice")
+        store.add_points(user["id"], delta=5, kind="seed")
+        task = store.create_pending_task(
+            task_id=store.next_id("task"),
+            user_id=user["id"],
+            workspace_id=workspace_id,
+            title="meeting.mp3",
+            source_name="meeting.mp3",
+            content_type="audio/mpeg",
+            original_size_bytes=1024,
+            duration_seconds=120.0,
+            points_cost=2,
+            charge_basis="120.0s -> 2 points",
+            agreement_version=AGREEMENT_VERSION,
+            local_file_path=str(tmp_path / "meeting.mp3"),
+        )
+
+        store.mark_task_starting_with_points(task["id"], user["id"])
+        failed = store.fail_task_with_points_refund(task["id"], "ASR failed")
+        store.fail_task_with_points_refund(task["id"], "ASR failed again")
+
+        assert failed["status"] == "failed"
+        assert store.get_user(user["id"])["points_balance"] == 5
+        refunds = [
+            item
+            for item in store.list_point_ledger(user["id"])
+            if item["kind"] == "transcription_refund"
+        ]
+        assert len(refunds) == 1
+        assert refunds[0]["delta"] == 2
+        assert refunds[0]["task_id"] == task["id"]
+    finally:
+        store.close()
+        repo.close()
+
+
 def test_payment_confirmation_is_idempotent_and_atomic(tmp_path):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     store = ASRSiteStore(repo)
