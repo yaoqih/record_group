@@ -141,7 +141,12 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
           size_bytes: file.size
         })
       });
-      await uploadToStorage(file, index, init.upload || {});
+      try {
+        await uploadToStorage(file, index, init.upload || {});
+      } catch (error) {
+        setStatus(index, '切换服务器上传', 0);
+        return uploadThroughApi(file, index);
+      }
       setStatus(index, '正在创建任务', 100);
       return completeUpload(init);
     }
@@ -160,6 +165,28 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) return resolve();
           reject(new Error(storageError(xhr.responseText) || `上传到存储失败：HTTP ${xhr.status}`));
+        };
+        xhr.onerror = () => reject(new Error('网络连接失败'));
+        xhr.send(form);
+      });
+    }
+
+    function uploadThroughApi(file, index) {
+      return new Promise((resolve, reject) => {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        form.append('source_name', file.name);
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/site/me/tasks');
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) setStatus(index, '服务器上传中', Math.round(event.loaded / event.total * 100));
+        };
+        xhr.onload = () => {
+          let data = {};
+          try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+          if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+          reject(new Error(data.detail || `上传失败：HTTP ${xhr.status}`));
         };
         xhr.onerror = () => reject(new Error('网络连接失败'));
         xhr.send(form);
