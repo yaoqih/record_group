@@ -108,6 +108,19 @@ def test_api_allows_frontend_assets_without_api_key(tmp_path, monkeypatch):
     repo.close()
 
 
+def test_api_allows_mobile_upload_page_without_api_key(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    monkeypatch.setenv("RECORDFLOW_APP_API_KEY", "admin-secret")
+    app = create_app(repo)
+    client = TestClient(app)
+
+    response = client.get("/mobile-upload")
+
+    assert response.status_code == 200
+    assert "上传手机文件" in response.text
+    repo.close()
+
+
 def test_api_can_enqueue_record_job_and_return_job_status(tmp_path):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     app = create_app(repo)

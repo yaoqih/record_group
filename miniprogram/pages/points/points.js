@@ -24,7 +24,7 @@ Page({
         nextCursor: data.next_cursor || ''
       })
     } catch (error) {
-      this.setData({ error: error.message || '加载点数明细失败' })
+      this.setData({ error: ledgerErrorMessage(error) })
     } finally {
       this.setData({ loading: false })
     }
@@ -42,7 +42,7 @@ Page({
         nextCursor: data.next_cursor || ''
       })
     } catch (error) {
-      this.setData({ error: error.message || '加载更多失败' })
+      this.setData({ error: ledgerErrorMessage(error, '加载更多失败') })
     } finally {
       this.setData({ loadingMore: false })
     }
@@ -69,6 +69,11 @@ function formatEntry(entry) {
     note: entry.display_note || entry.note || '无备注',
     createdLabel: formatDate(entry.created_at)
   }
+}
+
+function ledgerErrorMessage(error, fallback = '加载点数明细失败') {
+  if (error && error.statusCode === 404) return '点数明细服务正在更新，请稍后再试'
+  return (error && error.message) || fallback
 }
 
 function formatDate(value) {

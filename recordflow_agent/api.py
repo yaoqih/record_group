@@ -260,7 +260,7 @@ def create_app(repo: object | None = None) -> FastAPI:
         )
         if (
             configured_key
-            and request.url.path not in {"/", "/health", "/agreement", "/site/agreement"}
+            and request.url.path not in {"/", "/health", "/agreement", "/mobile-upload", "/site/agreement"}
             and not request.url.path.startswith(public_path_prefixes)
             and not request.url.path.startswith(site_session_prefixes)
             and not public_admin_shell
