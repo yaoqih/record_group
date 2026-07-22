@@ -4,3 +4,4 @@
 .ledger-row:last-child { border-bottom: 0; }
 .ledger-icon { display: flex; align-items: center; justify-content: center; width: 64rpx; height: 64rpx; flex: 0 0 auto; border-radius: 18rpx; background: #eaf7f3; }
 .ledger-main { min-width: 0; flex: 1; }.ledger-kind { color: #20332e; font-size: 26rpx; font-weight: 650; }.ledger-note { margin-top: 5rpx; overflow: hidden; color: #71817c; font-size: 21rpx; text-overflow: ellipsis; white-space: nowrap; }.ledger-date { margin-top: 6rpx; color: #a1afab; font-size: 19rpx; }.ledger-delta { flex: 0 0 auto; font-size: 28rpx; font-weight: 700; }.ledger-delta-positive { color: #067647; }.ledger-delta-negative { color: #b42318; }
+t-button { display: block; margin-top: 20rpx; }

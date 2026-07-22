@@ -82,26 +82,77 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
       return '';
     }
 
-    function uploadFile(file, index) {
+    async function uploadFile(file, index) {
+      setStatus(index, '准备上传', 0);
+      const init = await apiRequest('/site/me/tasks/direct-upload/init', {
+        method: 'POST',
+        body: JSON.stringify({
+          source_name: file.name,
+          content_type: file.type || 'application/octet-stream',
+          size_bytes: file.size
+        })
+      });
+      await uploadToStorage(file, index, init.upload || {});
+      setStatus(index, '正在创建任务', 100);
+      return completeUpload(init);
+    }
+
+    function uploadToStorage(file, index, target) {
       return new Promise((resolve, reject) => {
         const form = new FormData();
-        form.append('file', file, file.name);
-        form.append('source_name', file.name);
+        Object.entries(target.form_data || {}).forEach(([key, value]) => form.append(key, value));
+        form.append(target.file_field || 'file', file, file.name);
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/site/me/tasks');
-        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.open(target.method || 'POST', target.url);
+        Object.entries(target.headers || {}).forEach(([key, value]) => xhr.setRequestHeader(key, value));
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) setStatus(index, '上传中', Math.round(event.loaded / event.total * 100));
         };
         xhr.onload = () => {
-          let data = {};
-          try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
-          if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
-          reject(new Error(data.detail || `上传失败：HTTP ${xhr.status}`));
+          if (xhr.status >= 200 && xhr.status < 300) return resolve();
+          reject(new Error(storageError(xhr.responseText) || `上传到存储失败：HTTP ${xhr.status}`));
         };
         xhr.onerror = () => reject(new Error('网络连接失败'));
         xhr.send(form);
       });
+    }
+
+    async function completeUpload(init) {
+      let lastError;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await apiRequest('/site/me/tasks/direct-upload/complete', {
+            method: 'POST',
+            body: JSON.stringify({
+              upload_token: init.upload_token,
+              object_key: init.upload && init.upload.object_key
+            })
+          });
+        } catch (error) {
+          lastError = error;
+          if (error.status !== 409 || attempt === 2) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
+        }
+      }
+      throw lastError;
+    }
+
+    async function apiRequest(path, options) {
+      const response = await fetch(path, {
+        ...options,
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+      });
+      let data = {};
+      try { data = await response.json(); } catch (_) {}
+      if (response.ok) return data;
+      const error = new Error(data.detail || `请求失败：HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+
+    function storageError(text) {
+      const matched = String(text || '').match(/<Message>([^<]+)<[/]Message>/);
+      return matched ? matched[1] : '';
     }
 
     function render() {

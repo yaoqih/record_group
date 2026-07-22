@@ -667,20 +667,62 @@ def test_site_submit_task_returns_readable_error_when_ffprobe_is_missing(tmp_pat
     repo.close()
 
 
-def test_site_submit_task_rejects_video_uploads(tmp_path):
+def test_site_submit_task_accepts_video_uploads(tmp_path, monkeypatch):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     app = create_app(repo)
     client = TestClient(app)
 
     user = client.post("/site/users", json={"name": "Alice"}).json()["user"]
+    monkeypatch.setattr(api_module, "probe_media_duration_seconds", lambda file_path: 30.0)
 
     response = client.post(
         f"/site/users/{user['id']}/tasks",
         files={"file": ("clip.mp4", b"fake-video-data", "video/mp4")},
     )
 
+    assert response.status_code == 200
+    assert response.json()["task"]["source_name"] == "clip.mp4"
+    assert response.json()["task"]["content_type"] == "video/mp4"
+    repo.close()
+
+
+def test_site_point_ledger_supports_cursor_pagination_and_public_labels(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
+    app = create_app(repo)
+    client = TestClient(app)
+    user = client.post("/site/users", json={"name": "Alice"}).json()["user"]
+    store = ASRSiteStore(repo)
+    try:
+        for index in range(5):
+            store.add_points(user["id"], delta=1, kind="signup_bonus", note=f"internal-{index}")
+    finally:
+        store.close()
+    headers = {"Authorization": f"Bearer {api_module.create_site_session_token(user['id'])}"}
+
+    first = client.get("/site/me/point-ledger?limit=2", headers=headers)
+    second = client.get(
+        f"/site/me/point-ledger?limit=2&cursor={first.json()['next_cursor']}", headers=headers
+    )
+
+    assert first.status_code == 200
+    assert first.json()["has_more"] is True
+    assert first.json()["entries"][0]["display_title"] == "注册赠送"
+    assert first.json()["entries"][0]["display_note"] == "系统赠送点数"
+    assert not ({entry["id"] for entry in first.json()["entries"]} & {entry["id"] for entry in second.json()["entries"]})
+    repo.close()
+
+
+def test_site_point_ledger_rejects_invalid_cursor(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
+    client = TestClient(create_app(repo))
+    user = client.post("/site/users", json={"name": "Alice"}).json()["user"]
+    headers = {"Authorization": f"Bearer {api_module.create_site_session_token(user['id'])}"}
+
+    response = client.get("/site/me/point-ledger?cursor=not-a-cursor", headers=headers)
+
     assert response.status_code == 400
-    assert "仅支持提交音频文件" in response.json()["detail"]
     repo.close()
 
 

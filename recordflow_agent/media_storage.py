@@ -455,12 +455,10 @@ def find_file_version_by_name(
     object_name: str,
 ) -> dict[str, Any] | None:
     api_url = auth["apiInfo"]["storageApi"]["apiUrl"].rstrip("/")
-    account_id = auth["accountId"]
     request = Request(
         f"{api_url}/b2api/v3/b2_list_file_names",
         data=json.dumps(
             {
-                "accountId": account_id,
                 "bucketId": find_bucket_id(auth, bucket_name),
                 "prefix": object_name,
                 "maxFileCount": 1,

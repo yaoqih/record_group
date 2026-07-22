@@ -7,5 +7,6 @@
     </view>
   </view>
   <t-empty wx:else description="暂无点数明细" />
+  <t-button wx:if="{{hasMore}}" block variant="outline" loading="{{loadingMore}}" disabled="{{loadingMore}}" bind:tap="loadMore">加载更多</t-button>
   <view wx:if="{{error}}" class="error-box">{{error}}</view>
 </view>

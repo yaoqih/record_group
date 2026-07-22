@@ -617,11 +617,27 @@ def create_app(repo: object | None = None) -> FastAPI:
             store.close()
 
     @app.get("/site/me/point-ledger")
-    def list_site_me_point_ledger(request: Request) -> dict:
+    def list_site_me_point_ledger(request: Request, limit: int = 20, cursor: str = "") -> dict:
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 100.")
+        cursor_created_at, cursor_id = decode_point_ledger_cursor(cursor)
         store = open_site_store(app.state.repo)
         try:
             user = require_site_session_user(request, store)
-            return {"user": user, "entries": store.list_point_ledger(user["id"])}
+            entries, has_more = store.list_point_ledger_page(
+                user["id"],
+                limit=limit,
+                cursor_created_at=cursor_created_at,
+                cursor_id=cursor_id,
+            )
+            public_entries = [public_point_ledger_entry(entry) for entry in entries]
+            next_cursor = encode_point_ledger_cursor(entries[-1]) if has_more and entries else ""
+            return {
+                "user": user,
+                "entries": public_entries,
+                "has_more": has_more,
+                "next_cursor": next_cursor,
+            }
         finally:
             store.close()
 
@@ -1953,6 +1969,62 @@ def require_site_session_user(request: Request, store: ASRSiteStore) -> dict:
         return store.get_user(payload["sub"])
     except KeyError as exc:
         raise HTTPException(status_code=401, detail="Site session user not found.") from exc
+
+
+POINT_LEDGER_TITLES = {
+    "seed": "赠送",
+    "signup_bonus": "注册赠送",
+    "dev_signup_bonus": "注册赠送",
+    "recharge": "充值",
+    "wechatpay_recharge": "微信充值",
+    "consume": "转写消耗",
+    "transcription_refund": "转写退还",
+    "admin_adjustment_credit": "后台发放",
+    "admin_adjustment_debit": "后台扣减",
+}
+
+
+def public_point_ledger_entry(entry: dict) -> dict:
+    kind = str(entry.get("kind") or "")
+    public_entry = dict(entry)
+    public_entry["display_title"] = POINT_LEDGER_TITLES.get(kind, "点数变动")
+    if kind in {"signup_bonus", "dev_signup_bonus", "seed"}:
+        public_entry["display_note"] = "系统赠送点数"
+    elif kind in {"recharge", "wechatpay_recharge"}:
+        public_entry["display_note"] = "充值点数已到账"
+    elif kind == "consume":
+        public_entry["display_note"] = "转写任务扣点"
+    elif kind == "transcription_refund":
+        public_entry["display_note"] = "转写任务异常退还"
+    else:
+        public_entry["display_note"] = str(entry.get("note") or "点数调整")
+    return public_entry
+
+
+def encode_point_ledger_cursor(entry: dict) -> str:
+    created_at = entry.get("created_at")
+    if hasattr(created_at, "isoformat"):
+        created_at = created_at.isoformat()
+    payload = json.dumps(
+        {"created_at": str(created_at or ""), "id": str(entry.get("id") or "")},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def decode_point_ledger_cursor(cursor: str) -> tuple[str | None, str | None]:
+    if not cursor:
+        return None, None
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(cursor + padding).decode("utf-8"))
+        created_at = payload.get("created_at")
+        entry_id = payload.get("id")
+        if not isinstance(created_at, str) or not created_at or not isinstance(entry_id, str) or not entry_id:
+            raise ValueError
+        return created_at, entry_id
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, base64.binascii.Error) as exc:
+        raise HTTPException(status_code=400, detail="Invalid point ledger cursor.") from exc
 
 
 def is_supported_site_task_audio(filename: str, content_type: str | None) -> bool:

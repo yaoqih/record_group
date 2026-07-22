@@ -63,6 +63,9 @@ class SlidingWindowRateLimiter:
                     "direct_upload_init",
                     env_int("RECORDFLOW_RATE_LIMIT_DIRECT_UPLOAD_INIT_REQUESTS", 30),
                 ),
+                "task_upload": RateLimitRule(
+                    "task_upload", env_int("RECORDFLOW_RATE_LIMIT_TASK_UPLOAD_REQUESTS", 12)
+                ),
                 "wechatpay": RateLimitRule(
                     "wechatpay", env_int("RECORDFLOW_RATE_LIMIT_WECHATPAY_REQUESTS", 12)
                 ),
@@ -128,7 +131,7 @@ class RequestGuard:
         request_id = request_id_for(request)
         request.state.request_id = request_id
         started = time.perf_counter()
-        scope = sensitive_rate_limit_scope(request.url.path)
+        scope = sensitive_rate_limit_scope(request.url.path, request.method)
         retry_after = None
         if scope:
             retry_after = self.limiter.retry_after(scope, self._client_id(request))
@@ -185,11 +188,13 @@ def request_id_for(request: Request) -> str:
     return uuid.uuid4().hex
 
 
-def sensitive_rate_limit_scope(path: str) -> str | None:
+def sensitive_rate_limit_scope(path: str, method: str = "") -> str | None:
     if path.startswith("/site/auth/"):
         return "auth"
     if path == "/site/me/tasks/direct-upload/init":
         return "direct_upload_init"
+    if path == "/site/me/tasks" and method.upper() == "POST":
+        return "task_upload"
     if "/wechatpay" in path:
         return "wechatpay"
     if path.endswith("/export"):

@@ -9,7 +9,7 @@ os.environ["RECORDFLOW_SKIP_DEFAULT_APP"] = "1"
 
 from recordflow_agent import api as api_module
 from recordflow_agent.api import create_app
-from recordflow_agent.http_guard import RateLimitRule, SlidingWindowRateLimiter
+from recordflow_agent.http_guard import RateLimitRule, SlidingWindowRateLimiter, sensitive_rate_limit_scope
 from recordflow_agent.sqlite_repository import SQLiteRepository
 
 
@@ -99,6 +99,11 @@ def test_rate_limiter_evicts_oldest_key_when_capacity_is_reached():
 
     assert len(limiter._buckets) == 2
     assert ("auth", "client-1") not in limiter._buckets
+
+
+def test_task_upload_rate_limit_only_applies_to_post_requests():
+    assert sensitive_rate_limit_scope("/site/me/tasks", "POST") == "task_upload"
+    assert sensitive_rate_limit_scope("/site/me/tasks", "GET") is None
 
 
 def test_production_requires_explicit_recordflow_session_secret(tmp_path, monkeypatch):

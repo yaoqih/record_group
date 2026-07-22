@@ -21,6 +21,16 @@ def test_public_user_page_is_disabled_but_admin_and_agreement_are_exposed(tmp_pa
     assert "1375626371@qq.com" in agreement_response.text
 
 
+def test_mobile_upload_page_uses_direct_storage_upload(tmp_path):
+    app = create_app(SQLiteRepository(tmp_path / "recordflow.db"))
+    response = TestClient(app).get("/mobile-upload")
+
+    assert response.status_code == 200
+    assert "/site/me/tasks/direct-upload/init" in response.text
+    assert "/site/me/tasks/direct-upload/complete" in response.text
+    assert "xhr.open(target.method || 'POST', target.url)" in response.text
+
+
 def test_dashboard_endpoint_still_returns_workspace_results(tmp_path):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     app = create_app(repo)

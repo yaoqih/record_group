@@ -76,6 +76,12 @@ RecordFlow upload token. Add the COS endpoint to the Mini Program
 `https://record-1439403413.cos.ap-shanghai.myqcloud.com`. If the temporary COS
 bucket is intentionally public-writable, set:
 
+The `/mobile-upload` browser page uses the same signed POST flow. Configure the
+COS bucket CORS policy to allow `POST` from every deployed API page origin
+(for example `https://record-api.blenet.top` and the staging API origin), and
+allow the `Content-Type` request header. Do not use `*` for the allowed origin
+when credentials are enabled.
+
 ```env
 RECORDFLOW_COS_DIRECT_UPLOAD_PUBLIC_WRITE=true
 ```

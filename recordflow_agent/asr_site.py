@@ -341,6 +341,32 @@ class ASRSiteStore:
             )
         return [self._row_dict(row) for row in rows]
 
+    def list_point_ledger_page(
+        self,
+        user_id: str,
+        *,
+        limit: int,
+        cursor_created_at: str | None = None,
+        cursor_id: str | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        conditions = ["user_id = {}"]
+        params: list[Any] = [user_id]
+        if cursor_created_at and cursor_id:
+            conditions.append("(created_at < {} OR (created_at = {} AND id < {}))")
+            params.extend([cursor_created_at, cursor_created_at, cursor_id])
+        params.append(limit + 1)
+        rows = self._fetchall(
+            f"""
+            SELECT * FROM site_point_ledger
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT {{}}
+            """,
+            tuple(params),
+        )
+        has_more = len(rows) > limit
+        return [self._row_dict(row) for row in rows[:limit]], has_more
+
     def create_payment_order(
         self,
         *,
@@ -1181,6 +1207,12 @@ class ASRSiteStore:
             )
             self.conn.execute(
                 """
+                CREATE INDEX IF NOT EXISTS idx_site_point_ledger_user_created
+                ON site_point_ledger(user_id, created_at DESC, id DESC)
+                """
+            )
+            self.conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS site_wechat_identities(
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -1293,6 +1325,8 @@ class ASRSiteStore:
                     task_id TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE INDEX IF NOT EXISTS idx_site_point_ledger_user_created
+                ON site_point_ledger(user_id, created_at DESC, id DESC);
                 CREATE TABLE IF NOT EXISTS site_wechat_identities(
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
