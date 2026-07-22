@@ -19,6 +19,8 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
     .picker span { display: block; margin-top: 8px; color: #71817c; font-size: 13px; }
     input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
     .list { display: grid; gap: 10px; margin-top: 18px; }
+    .summary { min-height: 22px; margin-top: 14px; color: #08705d; font-size: 14px; font-weight: 600; }
+    .summary.error { color: #b42318; }
     .item { padding: 15px; border: 1px solid #e1e9e6; border-radius: 8px; background: #fff; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .name { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -29,6 +31,7 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
     .error-text { margin-top: 8px; color: #b42318; font-size: 12px; line-height: 1.5; }
     button { width: 100%; min-height: 46px; margin-top: 16px; border: 0; border-radius: 8px; background: #08705d; color: #fff; font: inherit; font-weight: 650; }
     button:disabled { background: #a9b9b5; }
+    #confirm { display: none; background: #fff; color: #08705d; border: 1px solid #08705d; }
     .notice { margin-top: 16px; color: #71817c; font-size: 12px; line-height: 1.6; }
   </style>
 </head>
@@ -38,10 +41,13 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
     <p class="subtitle">从系统文件选择器添加音频或视频，上传后会生成待确认的转写任务。</p>
     <label class="picker" for="files"><strong>选择文件</strong><span>支持 MP3、M4A、WAV、MP4、MOV 等，最多 9 个</span></label>
     <input id="files" type="file" accept="audio/*,video/mp4,video/quicktime,video/webm,.mp3,.m4a,.wav,.aac,.flac,.ogg,.opus,.webm,.mp4,.mov,.m4v" multiple />
+    <div id="summary" class="summary"></div>
     <div id="list" class="list"></div>
-    <button id="upload" type="button" disabled>开始上传</button>
+    <button id="upload" type="button" disabled>重新上传所选文件</button>
+    <button id="confirm" type="button">返回确认任务</button>
     <p class="notice">单个文件不能超过 200MB。上传期间请保持页面开启。</p>
   </main>
+  <script src="https://res.wx.qq.com/open/js/jweixin-1.6.0.js"></script>
   <script>
     const MAX_FILES = 9;
     const MAX_BYTES = 200 * 1024 * 1024;
@@ -49,30 +55,73 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
     const token = new URLSearchParams(location.hash.slice(1)).get('token') || '';
     const input = document.getElementById('files');
     const list = document.getElementById('list');
+    const summary = document.getElementById('summary');
     const upload = document.getElementById('upload');
+    const confirm = document.getElementById('confirm');
     let files = [];
+    let uploading = false;
+    let uploadedTaskIds = [];
 
-    input.addEventListener('change', () => {
+    input.addEventListener('change', async () => {
       files = Array.from(input.files || []).slice(0, MAX_FILES);
       render();
-      upload.disabled = !files.length || !token;
+      if (!files.length) return;
+      if (!token) {
+        setSummary('登录状态已失效，请返回小程序重新进入', true);
+        return;
+      }
+      setSummary(`已选择 ${files.length} 个文件，准备上传`);
+      await nextPaint();
+      startUploads();
     });
 
-    upload.addEventListener('click', async () => {
+    upload.addEventListener('click', startUploads);
+
+    async function startUploads() {
+      if (uploading || !files.length || !token) return;
+      uploading = true;
+      uploadedTaskIds = [];
+      confirm.style.display = 'none';
       upload.disabled = true;
+      input.disabled = true;
+      let completed = 0;
+      let failed = 0;
       for (let index = 0; index < files.length; index += 1) {
         const file = files[index];
         const validation = validate(file);
-        if (validation) { setStatus(index, '不可上传', 0, validation, 'error'); continue; }
+        if (validation) {
+          failed += 1;
+          setStatus(index, '不可上传', 0, validation, 'error');
+          continue;
+        }
         try {
-          await uploadFile(file, index);
+          const result = await uploadFile(file, index);
+          if (result && result.task && result.task.id) uploadedTaskIds.push(result.task.id);
+          completed += 1;
           setStatus(index, '已上传', 100, '', 'success');
         } catch (error) {
+          failed += 1;
           setStatus(index, '上传失败', 0, error.message || '上传失败', 'error');
         }
+        setSummary(`上传进度：完成 ${completed} 个，失败 ${failed} 个`);
       }
+      uploading = false;
+      input.disabled = false;
       upload.disabled = false;
-      upload.textContent = '继续上传';
+      setSummary(failed ? `上传完成：成功 ${completed} 个，失败 ${failed} 个` : `上传成功，共 ${completed} 个文件`, failed > 0);
+      if (uploadedTaskIds.length) confirm.style.display = 'block';
+    }
+
+    confirm.addEventListener('click', () => {
+      if (!window.wx || !wx.miniProgram) {
+        setSummary('请点击左上角返回小程序，在任务列表中确认任务', true);
+        return;
+      }
+      if (uploadedTaskIds.length === 1) {
+        wx.miniProgram.redirectTo({ url: `/pages/task/task?id=${encodeURIComponent(uploadedTaskIds[0])}` });
+        return;
+      }
+      wx.miniProgram.switchTab({ url: '/pages/tasks/tasks' });
     });
 
     function validate(file) {
@@ -175,6 +224,15 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
       status.className = `status ${theme}`;
       item.querySelector('.bar').style.width = `${progress}%`;
       item.querySelector('.error-text').textContent = error;
+    }
+
+    function setSummary(text, isError = false) {
+      summary.textContent = text;
+      summary.className = `summary${isError ? ' error' : ''}`;
+    }
+
+    function nextPaint() {
+      return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
 
     function formatSize(bytes) {
