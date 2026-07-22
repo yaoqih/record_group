@@ -169,6 +169,10 @@ Page({
     wx.navigateTo({ url: '/pages/agreement/agreement' })
   },
 
+  openPointLedger() {
+    wx.navigateTo({ url: '/pages/points/points' })
+  },
+
   copyUserId() {
     const userId = this.data.user && this.data.user.id
     if (!userId) return

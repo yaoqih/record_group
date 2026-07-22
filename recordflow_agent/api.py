@@ -50,6 +50,7 @@ from recordflow_agent.media_storage import (
     is_supported_upload_media,
     upload_media_to_b2,
 )
+from recordflow_agent.mobile_upload import MOBILE_UPLOAD_HTML
 from recordflow_agent.pipeline import process_record
 from recordflow_agent.profiles import load_profile
 from recordflow_agent.repository_factory import create_repository
@@ -75,6 +76,10 @@ SITE_TASK_AUDIO_MIME_TYPES = {
     "audio/x-aiff",
     "audio/x-m4a",
     "audio/x-wav",
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+    "video/x-m4v",
 }
 SITE_TASK_AUDIO_EXTENSIONS = {
     ".aac",
@@ -82,7 +87,10 @@ SITE_TASK_AUDIO_EXTENSIONS = {
     ".aiff",
     ".flac",
     ".m4a",
+    ".m4v",
+    ".mov",
     ".mp3",
+    ".mp4",
     ".oga",
     ".ogg",
     ".opus",
@@ -301,6 +309,10 @@ def create_app(repo: object | None = None) -> FastAPI:
     @app.get("/agreement", response_class=HTMLResponse)
     def agreement_page() -> str:
         return AGREEMENT_HTML
+
+    @app.get("/mobile-upload", response_class=HTMLResponse)
+    def mobile_upload_page() -> str:
+        return MOBILE_UPLOAD_HTML
 
     @app.get("/site/agreement")
     def site_agreement_metadata() -> dict:
@@ -601,6 +613,15 @@ def create_app(repo: object | None = None) -> FastAPI:
                     "accepted": store.has_accepted_user_agreement(user["id"], AGREEMENT_VERSION),
                 },
             }
+        finally:
+            store.close()
+
+    @app.get("/site/me/point-ledger")
+    def list_site_me_point_ledger(request: Request) -> dict:
+        store = open_site_store(app.state.repo)
+        try:
+            user = require_site_session_user(request, store)
+            return {"user": user, "entries": store.list_point_ledger(user["id"])}
         finally:
             store.close()
 
@@ -1082,7 +1103,7 @@ def create_app(repo: object | None = None) -> FastAPI:
         if not is_supported_site_task_audio(filename, file.content_type):
             raise HTTPException(
                 status_code=400,
-                detail="仅支持提交音频文件，支持 mp3、m4a、wav、ogg、webm、flac 等格式。",
+                detail="仅支持提交音频或视频文件，支持 mp3、m4a、wav、mp4、mov、ogg、webm、flac 等格式。",
             )
         data = await file.read()
         if not data:

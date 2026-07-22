@@ -30,8 +30,8 @@
   <view class="upload-card {{!user ? 'upload-card-disabled' : ''}}" bindtap="chooseMessageFile">
     <view class="upload-icon"><t-icon name="upload" size="54rpx" color="#08705d" /></view>
     <view class="upload-title">{{uploading ? '正在上传录音' : (uploadQueue.length ? '继续添加录音' : '选择录音文件')}}</view>
-    <view class="upload-copy">{{uploadSummary || '从微信聊天或本地文件中选择，可多选'}}</view>
-    <view class="format-row"><text>MP3</text><text>M4A</text><text>WAV</text><text>更多格式</text><text>≤ 200MB/个</text><text>最多 9 个</text></view>
+    <view class="upload-copy">{{uploadSummary || '支持微信聊天文件、手机文件和相册视频'}}</view>
+    <view class="format-row"><text>MP3</text><text>M4A</text><text>WAV</text><text>MP4/MOV</text><text>≤ 200MB/个</text><text>最多 9 个</text></view>
 
     <view wx:if="{{uploadQueue.length}}" class="upload-queue" catchtap="stopTap">
       <view class="upload-queue-heading">

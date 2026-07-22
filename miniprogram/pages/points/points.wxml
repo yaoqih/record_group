@@ -1,0 +1,11 @@
+<view class="page points-page">
+  <view wx:if="{{entries.length}}" class="ledger-list">
+    <view wx:for="{{entries}}" wx:key="id" class="ledger-row">
+      <view class="ledger-icon"><t-icon name="wallet" size="30rpx" color="#08705d" /></view>
+      <view class="ledger-main"><view class="ledger-kind">{{item.kindLabel}}</view><view class="ledger-note">{{item.note}}</view><view class="ledger-date">{{item.createdLabel}}</view></view>
+      <view class="ledger-delta ledger-delta-{{item.deltaClass}}">{{item.deltaLabel}} 点</view>
+    </view>
+  </view>
+  <t-empty wx:else description="暂无点数明细" />
+  <view wx:if="{{error}}" class="error-box">{{error}}</view>
+</view>

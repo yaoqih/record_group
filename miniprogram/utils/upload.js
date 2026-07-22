@@ -1,6 +1,6 @@
 const MAX_AUDIO_BYTES = 200 * 1024 * 1024
 const MAX_UPLOAD_FILES = 9
-const AUDIO_EXTENSIONS = ['.aac', '.aif', '.aiff', '.flac', '.m4a', '.mp3', '.oga', '.ogg', '.opus', '.pcm', '.wav', '.webm']
+const AUDIO_EXTENSIONS = ['.aac', '.aif', '.aiff', '.flac', '.m4a', '.m4v', '.mov', '.mp3', '.mp4', '.oga', '.ogg', '.opus', '.pcm', '.wav', '.webm']
 const AUDIO_PICKER_EXTENSIONS = AUDIO_EXTENSIONS.map((extension) => extension.slice(1))
 
 function buildUploadSelection(tempFiles, batchId = Date.now()) {
@@ -40,7 +40,7 @@ function audioFileValidationError(file) {
   const name = String((file && file.name) || '').trim()
   const lowerName = name.toLowerCase()
   if (!name || !AUDIO_EXTENSIONS.some((extension) => lowerName.endsWith(extension))) {
-    return '仅支持常用音频文件'
+    return '仅支持常用音频或视频文件'
   }
   if (!String((file && file.path) || '').trim()) return '无法读取该文件'
   if (Number((file && file.size) || 0) > MAX_AUDIO_BYTES) return '文件不能超过 200MB'

@@ -163,12 +163,46 @@ Page({
     }
     if (!this.ensureAgreementAccepted()) return
     if (this.data.uploading) return
+    wx.showActionSheet({
+      itemList: ['微信聊天文件', '手机文件（通用上传）', '手机相册视频'],
+      success: (result) => {
+        if (result.tapIndex === 0) return this.chooseChatFiles()
+        if (result.tapIndex === 1) return this.openWebUpload()
+        this.chooseLocalVideos()
+      },
+      fail: () => {}
+    })
+  },
+
+  openWebUpload() {
+    wx.navigateTo({ url: '/pages/web-upload/web-upload' })
+  },
+
+  chooseChatFiles() {
     wx.chooseMessageFile({
       count: uploadUtils.MAX_UPLOAD_FILES,
       type: 'file',
       extension: uploadUtils.AUDIO_PICKER_EXTENSIONS,
       success: (res) => {
         this.startUploadSelection(res.tempFiles || [])
+      },
+      fail: (error) => this.handleChooseFailure(error)
+    })
+  },
+
+  chooseLocalVideos() {
+    wx.chooseMedia({
+      count: uploadUtils.MAX_UPLOAD_FILES,
+      mediaType: ['video'],
+      sourceType: ['album'],
+      success: (res) => {
+        const files = (res.tempFiles || []).map((file) => ({
+          path: file.tempFilePath || file.path,
+          tempFilePath: file.tempFilePath,
+          name: file.name || `本地视频-${Date.now()}.mp4`,
+          size: file.size || 0
+        }))
+        this.startUploadSelection(files)
       },
       fail: (error) => this.handleChooseFailure(error)
     })

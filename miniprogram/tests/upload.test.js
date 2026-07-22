@@ -48,5 +48,6 @@ test('normalizeUploadProgress clamps and rounds progress values', () => {
 
 test('picker extensions use the format required by wx.chooseMessageFile', () => {
   assert.ok(AUDIO_PICKER_EXTENSIONS.includes('mp3'))
+  assert.ok(AUDIO_PICKER_EXTENSIONS.includes('mp4'))
   assert.equal(AUDIO_PICKER_EXTENSIONS.some((extension) => extension.startsWith('.')), false)
 })

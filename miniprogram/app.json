@@ -3,6 +3,8 @@
     "pages/index/index",
     "pages/tasks/tasks",
     "pages/task/task",
+    "pages/web-upload/web-upload",
+    "pages/points/points",
     "pages/agreement/agreement",
     "pages/mine/mine"
   ],

@@ -105,12 +105,17 @@ def test_site_dev_login_creates_local_user(tmp_path, monkeypatch):
     )
     token = login.json()["token"]
     me = client.get("/site/me", headers={"Authorization": f"Bearer {token}"})
+    ledger = client.get("/site/me/point-ledger", headers={"Authorization": f"Bearer {token}"})
 
     assert login.status_code == 200
     assert login.json()["user"]["name"] == "Local"
     assert login.json()["user"]["points_balance"] == 5
     assert me.status_code == 200
     assert me.json()["user"]["id"] == login.json()["user"]["id"]
+    assert ledger.status_code == 200
+    assert ledger.json()["user"]["id"] == login.json()["user"]["id"]
+    assert ledger.json()["entries"][0]["user_id"] == login.json()["user"]["id"]
+    assert ledger.json()["entries"][0]["delta"] == 5
     repo.close()
 
 
