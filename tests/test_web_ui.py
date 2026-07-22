@@ -30,6 +30,7 @@ def test_mobile_upload_page_uses_direct_storage_upload(tmp_path, monkeypatch):
     assert "/site/me/tasks/direct-upload/init" in response.text
     assert "/site/me/tasks/direct-upload/complete" in response.text
     assert "xhr.open(target.method || 'POST', target.url)" in response.text
+    assert "xhr.open('POST', '/site/me/tasks')" in response.text
 
 
 def test_dashboard_endpoint_still_returns_workspace_results(tmp_path):
