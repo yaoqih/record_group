@@ -252,6 +252,7 @@ module.exports = {
   clearSession,
   getCachedUser,
   getToken,
+  invalidateRequestCache,
   loginWithWechat,
   request,
   setSession,

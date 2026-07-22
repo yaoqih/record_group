@@ -29,9 +29,8 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
     .track { height: 5px; margin-top: 12px; overflow: hidden; border-radius: 3px; background: #e3ebe8; }
     .bar { width: 0; height: 100%; background: #08705d; transition: width .15s ease; }
     .error-text { margin-top: 8px; color: #b42318; font-size: 12px; line-height: 1.5; }
-    button { width: 100%; min-height: 46px; margin-top: 16px; border: 0; border-radius: 8px; background: #08705d; color: #fff; font: inherit; font-weight: 650; }
-    button:disabled { background: #a9b9b5; }
-    #confirm { display: none; background: #fff; color: #08705d; border: 1px solid #08705d; }
+    button { width: 100%; min-height: 46px; margin-top: 16px; border-radius: 8px; background: #fff; color: #08705d; border: 1px solid #08705d; font: inherit; font-weight: 650; }
+    #confirm { display: none; }
     .notice { margin-top: 16px; color: #71817c; font-size: 12px; line-height: 1.6; }
   </style>
 </head>
@@ -43,7 +42,6 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
     <input id="files" type="file" accept="audio/*,video/mp4,video/quicktime,video/webm,.mp3,.m4a,.wav,.aac,.flac,.ogg,.opus,.webm,.mp4,.mov,.m4v" multiple />
     <div id="summary" class="summary"></div>
     <div id="list" class="list"></div>
-    <button id="upload" type="button" disabled>重新上传所选文件</button>
     <button id="confirm" type="button">返回确认任务</button>
     <p class="notice">单个文件不能超过 200MB。上传期间请保持页面开启。</p>
   </main>
@@ -56,7 +54,6 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
     const input = document.getElementById('files');
     const list = document.getElementById('list');
     const summary = document.getElementById('summary');
-    const upload = document.getElementById('upload');
     const confirm = document.getElementById('confirm');
     let files = [];
     let uploading = false;
@@ -75,14 +72,11 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
       startUploads();
     });
 
-    upload.addEventListener('click', startUploads);
-
     async function startUploads() {
       if (uploading || !files.length || !token) return;
       uploading = true;
       uploadedTaskIds = [];
       confirm.style.display = 'none';
-      upload.disabled = true;
       input.disabled = true;
       let completed = 0;
       let failed = 0;
@@ -107,7 +101,6 @@ MOBILE_UPLOAD_HTML = """<!doctype html>
       }
       uploading = false;
       input.disabled = false;
-      upload.disabled = false;
       setSummary(failed ? `上传完成：成功 ${completed} 个，失败 ${failed} 个` : `上传成功，共 ${completed} 个文件`, failed > 0);
       if (uploadedTaskIds.length) confirm.style.display = 'block';
     }

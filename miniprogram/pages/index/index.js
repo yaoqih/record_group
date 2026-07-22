@@ -136,8 +136,7 @@ Page({
         timeout: REQUEST_TIMEOUT_MS
       })
       const tasks = data.tasks || []
-      const currentId = this.data.latestTask && this.data.latestTask.id
-      const latest = (currentId && tasks.find((task) => task.id === currentId)) || tasks[0] || null
+      const latest = tasks[0] || null
       const latestTask = latest ? decorateTask(latest) : null
       const nextSignature = taskViewSignature(latestTask)
       const previousStatus = this.data.latestTask && this.data.latestTask.status

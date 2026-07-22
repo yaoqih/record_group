@@ -12,5 +12,13 @@ Page({
       return
     }
     this.setData({ src: `${API_BASE}/mobile-upload#token=${encodeURIComponent(token)}` })
+  },
+
+  onHide() {
+    api.invalidateRequestCache()
+  },
+
+  onUnload() {
+    api.invalidateRequestCache()
   }
 })
