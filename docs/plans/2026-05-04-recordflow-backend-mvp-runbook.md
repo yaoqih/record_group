@@ -46,7 +46,7 @@ python3 -m recordflow_agent.worker
 
 数据库选择规则：
 
-- 设置 `DATABASE_URL`：使用 Postgres，适合 Neon / Aiven / Render Postgres。
+- 设置 `DATABASE_URL`：使用 PostgreSQL，适合托管或自建 PostgreSQL 服务。
 - 不设置 `DATABASE_URL`：使用 SQLite，适合本地开发和单进程验证。
 - `--db-path` 只用于强制 worker 跑本地 SQLite。
 
