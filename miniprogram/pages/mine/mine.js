@@ -103,7 +103,7 @@ Page({
         timeout: REQUEST_TIMEOUT_MS
       })
       await requestVirtualPayment(data.payment)
-      this.setData({ error: '虚拟支付已提交，到账以支付通知为准，请稍后刷新余额' })
+      this.setData({ error: '支付已提交，到账以微信支付通知为准，请稍后刷新余额' })
     } catch (error) {
       if (isPaymentCancel(error)) {
         showToast(this, 'warning', '已取消支付')
@@ -179,6 +179,20 @@ function requestVirtualPayment(payment) {
       reject(new Error('当前微信版本不支持虚拟支付'))
       return
     }
+    if (!payment || !payment.offerId || !payment.outTradeNo || !payment.paySig || !payment.signature) {
+      reject(new Error('支付参数不完整，请稍后重试'))
+      return
+    }
+    let settled = false
+    const settle = (handler, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      handler(value)
+    }
+    const timer = setTimeout(() => {
+      settle(reject, new Error('微信支付响应超时，请检查微信版本或在真机中重试'))
+    }, 15000)
     wx.requestVirtualPayment({
       mode: payment.mode,
       env: payment.env,
@@ -190,13 +204,11 @@ function requestVirtualPayment(payment) {
       paySig: payment.paySig,
       signature: payment.signature,
       signData: payment.signData,
-      success: resolve,
-      fail: (err) => {
-        console.error('requestVirtualPayment failed', err)
-        const message = [err.errMsg, err.errCode, err.code].filter(Boolean).join(' ') || '支付失败'
-        reject(new Error(message))
-      },
-      complete: (result) => console.log('requestVirtualPayment complete', result)
+      success: (result) => settle(resolve, result),
+      fail: (err) => settle(reject, new Error(err.errMsg || '支付失败')),
+      complete: () => {
+        // Some DevTools versions only invoke complete when virtual payment is unavailable.
+      }
     })
   })
 }
