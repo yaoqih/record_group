@@ -201,6 +201,10 @@ class ConfirmWechatPayRechargeRequest(BaseModel):
     out_trade_no: str
 
 
+class CreateVirtualRechargeRequest(BaseModel):
+    points: int
+
+
 class SaveCorrectionRequest(BaseModel):
     utterances: list[dict]
 
@@ -699,6 +703,43 @@ def create_app(repo: object | None = None) -> FastAPI:
         finally:
             store.close()
         return {"payment": payment, "package": package}
+
+    @app.post("/site/me/recharge/virtual")
+    def create_site_me_virtual_recharge(request: Request, body: CreateVirtualRechargeRequest) -> dict:
+        package = recharge_package_or_400(body.points)
+        appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
+        offer_id = os.getenv("WECHAT_VIRTUAL_OFFER_ID", "").strip()
+        env = int(os.getenv("WECHAT_VIRTUAL_ENV", "1"))
+        appkey = os.getenv(
+            "WECHAT_VIRTUAL_PRODUCTION_APPKEY" if env == 0 else "WECHAT_VIRTUAL_SANDBOX_APPKEY",
+            "",
+        ).strip() or os.getenv("WECHAT_VIRTUAL_APPKEY", "").strip()
+        if not appid or not offer_id or not appkey:
+            raise HTTPException(status_code=503, detail="微信虚拟支付尚未配置。")
+        store = open_site_store(app.state.repo)
+        try:
+            user = require_site_session_user(request, store)
+            identity = store.get_user_wechat_identity(user["id"], appid)
+            if not identity or not identity.get("openid") or not identity.get("session_key"):
+                raise HTTPException(status_code=400, detail="当前账号没有有效的微信登录态。")
+        finally:
+            store.close()
+        out_trade_no = f"rfv_{int(time.time())}_{secrets.token_hex(6)}"
+        sign_data = json.dumps({
+            "offerId": offer_id,
+            "buyQuantity": int(package["points"]),
+            "currencyType": "CNY",
+            "env": env,
+            "outTradeNo": out_trade_no,
+        }, ensure_ascii=False, separators=(",", ":"))
+        pay_sig = hmac.new(appkey.encode(), ("requestVirtualPayment&" + sign_data).encode(), hashlib.sha256).hexdigest()
+        signature = hmac.new(str(identity["session_key"]).encode(), sign_data.encode(), hashlib.sha256).hexdigest()
+        store = open_site_store(app.state.repo)
+        try:
+            store.create_payment_order(out_trade_no=out_trade_no, user_id=user["id"], points=int(package["points"]), amount_cents=int(package["amount_cents"]), provider="wechat_virtual")
+        finally:
+            store.close()
+        return {"package": package, "payment": {"mode": "currency", "env": env, "offerId": offer_id, "buyQuantity": int(package["points"]), "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
 
     @app.post("/site/me/recharge/wechatpay/confirm")
     def confirm_site_me_wechatpay_recharge(request: Request, body: ConfirmWechatPayRechargeRequest) -> dict:

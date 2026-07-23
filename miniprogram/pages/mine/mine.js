@@ -97,24 +97,13 @@ Page({
       error: ''
     })
     try {
-      const data = await api.request('/site/me/recharge/wechatpay', {
+      const data = await api.request('/site/me/recharge/virtual', {
         method: 'POST',
         data: { points },
         timeout: REQUEST_TIMEOUT_MS
       })
-      await requestPayment(data.payment)
-      const confirmed = await api.request('/site/me/recharge/wechatpay/confirm', {
-        method: 'POST',
-        data: { out_trade_no: data.payment.outTradeNo },
-        timeout: REQUEST_TIMEOUT_MS
-      })
-      this.applyUser(confirmed.user)
-      getApp().globalData.user = confirmed.user
-      if (confirmed.trade_state && confirmed.trade_state !== 'SUCCESS') {
-        this.setData({ error: '支付结果确认中，请稍后刷新账户余额' })
-        return
-      }
-      showToast(this, 'success', '支付完成')
+      await requestVirtualPayment(data.payment)
+      this.setData({ error: '支付已提交，到账以微信支付通知为准，请稍后刷新余额' })
     } catch (error) {
       if (isPaymentCancel(error)) {
         showToast(this, 'warning', '已取消支付')
@@ -184,14 +173,23 @@ Page({
   }
 })
 
-function requestPayment(payment) {
+function requestVirtualPayment(payment) {
   return new Promise((resolve, reject) => {
-    wx.requestPayment({
-      timeStamp: payment.timeStamp,
-      nonceStr: payment.nonceStr,
-      package: payment.package,
-      signType: payment.signType || 'RSA',
-      paySign: payment.paySign,
+    if (typeof wx.requestVirtualPayment !== 'function') {
+      reject(new Error('当前微信版本不支持虚拟支付'))
+      return
+    }
+    wx.requestVirtualPayment({
+      mode: payment.mode,
+      env: payment.env,
+      offerId: payment.offerId,
+      buyQuantity: payment.buyQuantity,
+      currencyType: payment.currencyType,
+      outTradeNo: payment.outTradeNo,
+      attach: payment.attach,
+      paySig: payment.paySig,
+      signature: payment.signature,
+      signData: payment.signData,
       success: resolve,
       fail: (err) => reject(new Error(err.errMsg || '支付失败'))
     })

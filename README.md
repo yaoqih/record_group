@@ -102,16 +102,15 @@ python3 -m recordflow_agent.worker --poll-seconds 1
 
 Open `miniprogram/` in WeChat DevTools, set the real appid in `miniprogram/project.config.json`, and update `miniprogram/utils/config.js` when using a deployed HTTPS API domain.
 
-WeChat Pay recharge uses JSAPI payment. Configure these backend-only secrets before enabling real payment:
+Recharge uses WeChat Mini Program Virtual Payment (currency mode). Configure these backend-only secrets before enabling payment:
 
 ```bash
-export WECHAT_PAY_MCH_ID="your-merchant-id"
-export WECHAT_PAY_MCH_SERIAL_NO="your-merchant-cert-serial"
-export WECHAT_PAY_MCH_PRIVATE_KEY_PATH="/secure/path/apiclient_key.pem"
-export WECHAT_PAY_NOTIFY_URL="https://api.your-domain.com/site/payments/wechat/notify"
+export WECHAT_VIRTUAL_OFFER_ID="your-offer-id"
+export WECHAT_VIRTUAL_ENV="1" # 1=sandbox, 0=production
+export WECHAT_VIRTUAL_APPKEY="sandbox-or-production-appkey"
 ```
 
-The MVP can create a WeChat Pay prepay order. Production must also verify the WeChat Pay notify callback before adding points to the user balance.
+The client uses `wx.requestVirtualPayment`. Payment notification handling is intentionally not included yet; points must not be credited from the client success callback alone.
 
 ## Run CLI
 

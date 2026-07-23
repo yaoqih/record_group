@@ -21,7 +21,7 @@
     "postcss": true,
     "minified": true,
     "ignoreDevUnusedFiles": true,
-    "ignoreUploadUnusedFiles": true,
+    "ignoreUploadUnusedFiles": false,
     "compileWorklet": false,
     "uglifyFileName": false,
     "uploadWithSourceMap": true,

@@ -262,6 +262,20 @@ class ASRSiteStore:
             return None
         return str(self._row_dict(row).get("openid") or "") or None
 
+    def get_user_wechat_identity(self, user_id: str, appid: str) -> dict[str, Any] | None:
+        if not appid:
+            return None
+        row = self._fetchone(
+            """
+            SELECT * FROM site_wechat_identities
+            WHERE user_id = {} AND appid = {}
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (user_id, appid),
+        )
+        return self._row_dict(row) if row is not None else None
+
     def get_or_create_wechat_user(
         self,
         *,
