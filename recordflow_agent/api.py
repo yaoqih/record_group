@@ -14,7 +14,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.parse import urlencode
 from urllib.parse import quote as url_quote
@@ -98,7 +97,6 @@ SITE_TASK_AUDIO_EXTENSIONS = {
     ".wav",
     ".webm",
 }
-WECHATPAY_UNAVAILABLE_DETAIL = "微信支付暂不可用，请稍后再试。"
 SITE_TASK_ACTIVE_DELETE_STATUSES = frozenset({"starting", "queued", "transcribing"})
 LOGGER = logging.getLogger(__name__)
 
@@ -193,14 +191,6 @@ class AdminAdjustPointsRequest(BaseModel):
     note: str = ""
 
 
-class CreateWechatPayRechargeRequest(BaseModel):
-    points: int
-
-
-class ConfirmWechatPayRechargeRequest(BaseModel):
-    out_trade_no: str
-
-
 class CreateVirtualRechargeRequest(BaseModel):
     points: int
 
@@ -264,7 +254,14 @@ def create_app(repo: object | None = None) -> FastAPI:
         )
         if (
             configured_key
-            and request.url.path not in {"/", "/health", "/agreement", "/mobile-upload", "/site/agreement"}
+            and request.url.path not in {
+                "/",
+                "/health",
+                "/agreement",
+                "/mobile-upload",
+                "/site/agreement",
+                "/wechat/callback",
+            }
             and not request.url.path.startswith(public_path_prefixes)
             and not request.url.path.startswith(site_session_prefixes)
             and not public_admin_shell
@@ -284,6 +281,21 @@ def create_app(repo: object | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/wechat/callback")
+    def verify_wechat_callback(
+        signature: str = "",
+        timestamp: str = "",
+        nonce: str = "",
+        echostr: str = "",
+    ) -> Response:
+        token = os.getenv("WECHAT_MESSAGE_TOKEN", "").strip()
+        if not token:
+            raise HTTPException(status_code=503, detail="微信消息推送尚未配置。")
+        expected = hashlib.sha1("".join(sorted([token, timestamp, nonce])).encode("utf-8")).hexdigest()
+        if not signature or not hmac.compare_digest(signature, expected):
+            raise HTTPException(status_code=403, detail="微信消息推送验签失败。")
+        return Response(content=echostr, media_type="text/plain")
 
     @app.get("/dashboard")
     def dashboard() -> dict:
@@ -675,41 +687,17 @@ def create_app(repo: object | None = None) -> FastAPI:
         finally:
             store.close()
 
-    @app.post("/site/me/recharge/wechatpay")
-    def create_site_me_wechatpay_recharge(request: Request, body: CreateWechatPayRechargeRequest) -> dict:
-        package = recharge_package_or_400(body.points)
-        store = open_site_store(app.state.repo)
-        try:
-            user = require_site_session_user(request, store)
-            openid = store.get_user_wechat_openid(user["id"], os.getenv("WECHAT_MINIAPP_APPID", "").strip())
-            if not openid:
-                raise HTTPException(status_code=400, detail="当前账号没有绑定微信 openid，无法发起微信支付。")
-        finally:
-            store.close()
-        payment = create_wechatpay_jsapi_recharge(
-            user_id=user["id"],
-            openid=openid,
-            points=package["points"],
-            amount_cents=package["amount_cents"],
-        )
-        store = open_site_store(app.state.repo)
-        try:
-            store.create_payment_order(
-                out_trade_no=payment["outTradeNo"],
-                user_id=user["id"],
-                points=int(package["points"]),
-                amount_cents=int(package["amount_cents"]),
-            )
-        finally:
-            store.close()
-        return {"payment": payment, "package": package}
-
     @app.post("/site/me/recharge/virtual")
     def create_site_me_virtual_recharge(request: Request, body: CreateVirtualRechargeRequest) -> dict:
         package = recharge_package_or_400(body.points)
         appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
         offer_id = os.getenv("WECHAT_VIRTUAL_OFFER_ID", "").strip()
-        env = int(os.getenv("WECHAT_VIRTUAL_ENV", "1"))
+        try:
+            env = int(os.getenv("WECHAT_VIRTUAL_ENV", "1"))
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail="微信虚拟支付环境配置无效。") from exc
+        if env not in {0, 1}:
+            raise HTTPException(status_code=503, detail="微信虚拟支付环境配置无效。")
         appkey = os.getenv(
             "WECHAT_VIRTUAL_PRODUCTION_APPKEY" if env == 0 else "WECHAT_VIRTUAL_SANDBOX_APPKEY",
             "",
@@ -740,54 +728,6 @@ def create_app(repo: object | None = None) -> FastAPI:
         finally:
             store.close()
         return {"package": package, "payment": {"mode": "currency", "env": env, "offerId": offer_id, "buyQuantity": int(package["points"]), "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
-
-    @app.post("/site/me/recharge/wechatpay/confirm")
-    def confirm_site_me_wechatpay_recharge(request: Request, body: ConfirmWechatPayRechargeRequest) -> dict:
-        out_trade_no = body.out_trade_no.strip()
-        if not out_trade_no:
-            raise HTTPException(status_code=400, detail="out_trade_no is required.")
-        store = open_site_store(app.state.repo)
-        try:
-            user = require_site_session_user(request, store)
-            try:
-                order = store.get_payment_order(out_trade_no)
-            except KeyError as exc:
-                raise HTTPException(status_code=404, detail="Payment order not found.") from exc
-            if order["user_id"] != user["id"]:
-                raise HTTPException(status_code=404, detail="Payment order not found.")
-            if order["status"] == "paid":
-                return {"user": user, "order": order, "credited": False}
-        finally:
-            store.close()
-
-        transaction = query_wechatpay_order(out_trade_no)
-        trade_state = str(transaction.get("trade_state") or "")
-        transaction_id = str(transaction.get("transaction_id") or "")
-        amount = transaction.get("amount") or {}
-        total = int(amount.get("total") or 0)
-        if trade_state != "SUCCESS":
-            store = open_site_store(app.state.repo)
-            try:
-                order = store.mark_payment_order_status(
-                    out_trade_no=out_trade_no,
-                    status=trade_state.lower() or "not_paid",
-                    transaction_id=transaction_id,
-                )
-                return {"user": user, "order": order, "credited": False, "trade_state": trade_state}
-            finally:
-                store.close()
-        if total != int(order["amount_cents"]):
-            raise HTTPException(status_code=409, detail="Payment amount does not match local order.")
-        store = open_site_store(app.state.repo)
-        try:
-            credited_user, credited = store.mark_payment_order_paid(
-                out_trade_no=out_trade_no,
-                transaction_id=transaction_id,
-            )
-            order = store.get_payment_order(out_trade_no)
-            return {"user": credited_user, "order": order, "credited": credited, "trade_state": trade_state}
-        finally:
-            store.close()
 
     @app.get("/site/me/tasks")
     def list_site_me_tasks(request: Request) -> dict:
@@ -1681,151 +1621,6 @@ def recharge_package_or_400(points: int) -> dict[str, int | str]:
     return {"points": points, "amount_cents": points, "label": f"{points} 点"}
 
 
-def create_wechatpay_jsapi_recharge(
-    *,
-    user_id: str,
-    openid: str,
-    points: int,
-    amount_cents: int,
-) -> dict[str, str]:
-    appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
-    mchid = os.getenv("WECHAT_PAY_MCH_ID", "").strip()
-    serial_no = os.getenv("WECHAT_PAY_MCH_SERIAL_NO", "").strip()
-    private_key_path = os.getenv("WECHAT_PAY_MCH_PRIVATE_KEY_PATH", "").strip()
-    notify_url = os.getenv("WECHAT_PAY_NOTIFY_URL", "").strip() or "https://example.com/site/payments/wechat/notify"
-    if not all([appid, mchid, serial_no, private_key_path]):
-        raise_wechatpay_unavailable("missing jsapi recharge configuration")
-    private_key_path = require_readable_wechatpay_private_key(private_key_path)
-
-    out_trade_no = f"rf_{int(time.time())}_{secrets.token_hex(6)}"
-    body = {
-        "appid": appid,
-        "mchid": mchid,
-        "description": f"RecordFlow 充值 {points} 点",
-        "out_trade_no": out_trade_no,
-        "notify_url": notify_url,
-        "amount": {"total": amount_cents, "currency": "CNY"},
-        "payer": {"openid": openid},
-        "attach": json.dumps({"user_id": user_id, "points": points}, ensure_ascii=False),
-    }
-    response = wechatpay_v3_request(
-        method="POST",
-        path="/v3/pay/transactions/jsapi",
-        body=body,
-        mchid=mchid,
-        serial_no=serial_no,
-        private_key_path=private_key_path,
-    )
-    prepay_id = response.get("prepay_id")
-    if not prepay_id:
-        raise_wechatpay_unavailable("prepay_id missing from WeChat Pay response")
-
-    timestamp = str(int(time.time()))
-    nonce_str = secrets.token_hex(16)
-    package_value = f"prepay_id={prepay_id}"
-    pay_sign = wechatpay_sign(
-        "\n".join([appid, timestamp, nonce_str, package_value, ""]),
-        private_key_path,
-    )
-    return {
-        "timeStamp": timestamp,
-        "nonceStr": nonce_str,
-        "package": package_value,
-        "signType": "RSA",
-        "paySign": pay_sign,
-        "outTradeNo": out_trade_no,
-    }
-
-
-def query_wechatpay_order(out_trade_no: str) -> dict:
-    mchid = os.getenv("WECHAT_PAY_MCH_ID", "").strip()
-    serial_no = os.getenv("WECHAT_PAY_MCH_SERIAL_NO", "").strip()
-    private_key_path = os.getenv("WECHAT_PAY_MCH_PRIVATE_KEY_PATH", "").strip()
-    if not all([mchid, serial_no, private_key_path]):
-        raise_wechatpay_unavailable("missing order query configuration")
-    private_key_path = require_readable_wechatpay_private_key(private_key_path)
-    path = f"/v3/pay/transactions/out-trade-no/{quote(out_trade_no)}?mchid={quote(mchid)}"
-    return wechatpay_v3_request(
-        method="GET",
-        path=path,
-        body=None,
-        mchid=mchid,
-        serial_no=serial_no,
-        private_key_path=private_key_path,
-    )
-
-
-def wechatpay_v3_request(
-    *,
-    method: str,
-    path: str,
-    body: dict | None,
-    mchid: str,
-    serial_no: str,
-    private_key_path: str,
-) -> dict:
-    body_text = "" if body is None else json.dumps(body, ensure_ascii=False, separators=(",", ":"))
-    timestamp = str(int(time.time()))
-    nonce_str = secrets.token_hex(16)
-    message = "\n".join([method, path, timestamp, nonce_str, body_text, ""])
-    signature = wechatpay_sign(message, private_key_path)
-    authorization = (
-        'WECHATPAY2-SHA256-RSA2048 '
-        f'mchid="{mchid}",nonce_str="{nonce_str}",signature="{signature}",'
-        f'timestamp="{timestamp}",serial_no="{serial_no}"'
-    )
-    request = UrlRequest(
-        f"https://api.mch.weixin.qq.com{path}",
-        data=body_text.encode("utf-8") if body is not None else None,
-        method=method,
-        headers={
-            "Authorization": authorization,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": "RecordFlow/0.1",
-        },
-    )
-    try:
-        with urlopen(request, timeout=20) as response:
-            payload = response.read().decode("utf-8")
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise_wechatpay_unavailable(f"WeChat Pay request failed: {detail}", exc)
-    return json.loads(payload or "{}")
-
-
-def require_readable_wechatpay_private_key(private_key_path: str) -> str:
-    try:
-        key_path = Path(private_key_path)
-        if not key_path.exists():
-            raise_wechatpay_unavailable("private key path does not exist")
-        if not key_path.is_file():
-            raise_wechatpay_unavailable("private key path is not a file")
-        if not os.access(key_path, os.R_OK):
-            raise_wechatpay_unavailable("private key path is not readable")
-    except OSError as exc:
-        raise_wechatpay_unavailable("private key path cannot be checked", exc)
-    return str(key_path)
-
-
-def raise_wechatpay_unavailable(reason: str, exc: Exception | None = None) -> None:
-    LOGGER.warning("WeChat Pay unavailable: %s", reason, exc_info=exc)
-    raise HTTPException(status_code=503, detail=WECHATPAY_UNAVAILABLE_DETAIL)
-
-
-def wechatpay_sign(message: str, private_key_path: str) -> str:
-    process = subprocess.run(
-        ["openssl", "dgst", "-sha256", "-sign", private_key_path],
-        input=message.encode("utf-8"),
-        capture_output=True,
-        check=False,
-    )
-    if process.returncode != 0:
-        error = process.stderr.decode("utf-8", errors="replace").strip()
-        raise_wechatpay_unavailable(f"WeChat Pay signing failed: {error}")
-    return base64.b64encode(process.stdout).decode("ascii")
-
-
 def exchange_wechat_code_for_session(*, appid: str, secret: str, code: str) -> dict:
     query = urlencode(
         {
@@ -2017,7 +1812,7 @@ POINT_LEDGER_TITLES = {
     "signup_bonus": "注册赠送",
     "dev_signup_bonus": "注册赠送",
     "recharge": "充值",
-    "wechatpay_recharge": "微信充值",
+    "wechat_virtual_recharge": "微信虚拟支付",
     "consume": "转写消耗",
     "transcription_refund": "转写退还",
     "admin_adjustment_credit": "后台发放",
@@ -2031,7 +1826,7 @@ def public_point_ledger_entry(entry: dict) -> dict:
     public_entry["display_title"] = POINT_LEDGER_TITLES.get(kind, "点数变动")
     if kind in {"signup_bonus", "dev_signup_bonus", "seed"}:
         public_entry["display_note"] = "系统赠送点数"
-    elif kind in {"recharge", "wechatpay_recharge"}:
+    elif kind in {"recharge", "wechat_virtual_recharge"}:
         public_entry["display_note"] = "充值点数已到账"
     elif kind == "consume":
         public_entry["display_note"] = "转写任务扣点"

@@ -112,7 +112,7 @@ const LEDGER_KIND_LABELS: Record<string, string> = {
   refund: '任务退款',
   signup_bonus: '注册奖励',
   dev_signup_bonus: '开发奖励',
-  wechatpay_recharge: '微信支付',
+  wechat_virtual_recharge: '微信虚拟支付',
   admin_adjustment_credit: '后台发放',
   admin_adjustment_debit: '后台扣减',
 }

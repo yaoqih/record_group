@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 os.environ["RECORDFLOW_SKIP_DEFAULT_APP"] = "1"
@@ -155,17 +156,27 @@ def test_site_me_task_upload_uses_session_user(tmp_path, monkeypatch):
     repo.close()
 
 
-def test_site_me_wechatpay_recharge_requires_configuration(tmp_path, monkeypatch):
+def test_pending_upload_path_uses_configured_root(tmp_path, monkeypatch):
+    from recordflow_agent.asr_site import pending_upload_path
+
+    monkeypatch.setenv("RECORDFLOW_PENDING_UPLOAD_ROOT", str(tmp_path / "oss" / "staging"))
+
+    path = pending_upload_path("task_1", "../客户录音.mp3")
+
+    assert path.parent == tmp_path / "oss" / "staging"
+    assert path.name == "task_1-客户录音.mp3"
+    assert path.parent.exists()
+
+
+def test_site_me_virtual_recharge_creates_virtual_payment_order(tmp_path, monkeypatch):
     repo = SQLiteRepository(tmp_path / "recordflow.db")
     app = create_app(repo)
     client = TestClient(app)
-
     monkeypatch.setenv("WECHAT_MINIAPP_APPID", "wx-test")
+    monkeypatch.setenv("WECHAT_VIRTUAL_OFFER_ID", "offer-test")
+    monkeypatch.setenv("WECHAT_VIRTUAL_SANDBOX_APPKEY", "virtual-appkey")
+    monkeypatch.setenv("WECHAT_VIRTUAL_ENV", "1")
     monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
-    monkeypatch.delenv("WECHAT_PAY_MCH_ID", raising=False)
-    monkeypatch.delenv("WECHAT_PAY_MCH_SERIAL_NO", raising=False)
-    monkeypatch.delenv("WECHAT_PAY_MCH_PRIVATE_KEY_PATH", raising=False)
-    monkeypatch.delenv("WECHAT_PAY_NOTIFY_URL", raising=False)
 
     store = ASRSiteStore(repo)
     try:
@@ -181,50 +192,46 @@ def test_site_me_wechatpay_recharge_requires_configuration(tmp_path, monkeypatch
     token = api_module.create_site_session_token(user["id"])
 
     response = client.post(
-        "/site/me/recharge/wechatpay",
+        "/site/me/recharge/virtual",
         json={"points": 100},
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "微信支付暂不可用，请稍后再试。"
-    repo.close()
+    assert response.status_code == 200
+    payment = response.json()["payment"]
+    assert payment["mode"] == "currency"
+    assert payment["offerId"] == "offer-test"
+    assert payment["buyQuantity"] == 100
+    store = ASRSiteStore(repo)
+    try:
+        assert store.get_payment_order(payment["outTradeNo"])["provider"] == "wechat_virtual"
+    finally:
+        store.close()
+        repo.close()
 
 
-def test_wechatpay_private_key_permission_error_returns_503(monkeypatch):
-    monkeypatch.setenv("WECHAT_MINIAPP_APPID", "wx-test")
-    monkeypatch.setenv("WECHAT_PAY_MCH_ID", "mch-id")
-    monkeypatch.setenv("WECHAT_PAY_MCH_SERIAL_NO", "serial-no")
-    monkeypatch.setenv("WECHAT_PAY_MCH_PRIVATE_KEY_PATH", "/root/cert/wechatpay/apiclient_key.pem")
+def test_wechat_callback_returns_echostr_after_token_validation(tmp_path, monkeypatch):
+    token = "callback-token"
+    timestamp = "1720000000"
+    nonce = "nonce-1"
+    signature = hashlib.sha1(
+        "".join(sorted([token, timestamp, nonce])).encode("utf-8")
+    ).hexdigest()
+    monkeypatch.setenv("WECHAT_MESSAGE_TOKEN", token)
+    client = TestClient(create_app(SQLiteRepository(tmp_path / "recordflow.db")))
 
-    def raise_permission(self):
-        raise PermissionError("permission denied")
-
-    monkeypatch.setattr(api_module.Path, "exists", raise_permission)
-
-    response = client_call_http_exception(
-        lambda: api_module.create_wechatpay_jsapi_recharge(
-            user_id="usr_1",
-            openid="openid-1",
-            points=100,
-            amount_cents=100,
-        )
+    response = client.get(
+        "/wechat/callback",
+        params={
+            "signature": signature,
+            "timestamp": timestamp,
+            "nonce": nonce,
+            "echostr": "wechat-challenge",
+        },
     )
 
-    assert response.status_code == 503
-    assert response.detail == "微信支付暂不可用，请稍后再试。"
-
-
-def test_pending_upload_path_uses_configured_root(tmp_path, monkeypatch):
-    from recordflow_agent.asr_site import pending_upload_path
-
-    monkeypatch.setenv("RECORDFLOW_PENDING_UPLOAD_ROOT", str(tmp_path / "oss" / "staging"))
-
-    path = pending_upload_path("task_1", "../客户录音.mp3")
-
-    assert path.parent == tmp_path / "oss" / "staging"
-    assert path.name == "task_1-客户录音.mp3"
-    assert path.parent.exists()
+    assert response.status_code == 200
+    assert response.text == "wechat-challenge"
 
 
 def test_site_me_direct_upload_init_returns_cos_signed_put_request(tmp_path, monkeypatch):
@@ -406,76 +413,7 @@ def test_site_me_direct_upload_complete_rejects_other_user_token(tmp_path, monke
     repo.close()
 
 
-def client_call_http_exception(func):
-    try:
-        func()
-    except api_module.HTTPException as exc:
-        return exc
-    raise AssertionError("Expected HTTPException")
-
-
-def test_site_me_wechatpay_confirm_queries_order_and_credits_once(tmp_path, monkeypatch):
-    repo = SQLiteRepository(tmp_path / "recordflow.db")
-    app = create_app(repo)
-    client = TestClient(app)
-
-    monkeypatch.setenv("WECHAT_MINIAPP_APPID", "wx-test")
-    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
-    monkeypatch.setattr(
-        api_module,
-        "query_wechatpay_order",
-        lambda out_trade_no: {
-            "out_trade_no": out_trade_no,
-            "transaction_id": "wx-tx-1",
-            "trade_state": "SUCCESS",
-            "amount": {"total": 100},
-        },
-    )
-
-    store = ASRSiteStore(repo)
-    try:
-        user = store.get_or_create_wechat_user(
-            appid="wx-test",
-            openid="openid-1",
-            unionid=None,
-            session_key="session-key",
-            default_name="Alice",
-        )
-        store.create_payment_order(
-            out_trade_no="rf_test_1",
-            user_id=user["id"],
-            points=100,
-            amount_cents=100,
-        )
-    finally:
-        store.close()
-    token = api_module.create_site_session_token(user["id"])
-
-    first = client.post(
-        "/site/me/recharge/wechatpay/confirm",
-        json={"out_trade_no": "rf_test_1"},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    second = client.post(
-        "/site/me/recharge/wechatpay/confirm",
-        json={"out_trade_no": "rf_test_1"},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert first.status_code == 200
-    assert first.json()["credited"] is True
-    assert first.json()["user"]["points_balance"] == 100
-    assert second.status_code == 200
-    assert second.json()["credited"] is False
-    store = ASRSiteStore(repo)
-    try:
-        assert store.get_user(user["id"])["points_balance"] == 100
-    finally:
-        store.close()
-        repo.close()
-
-
-def test_wechatpay_recharge_package_allows_custom_range():
+def test_virtual_recharge_package_allows_custom_range():
     custom = api_module.recharge_package_or_400(123)
 
     assert custom["points"] == 123

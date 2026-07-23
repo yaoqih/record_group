@@ -43,5 +43,5 @@ export RECORDFLOW_MINIAPP_SIGNUP_POINTS="10"
 - 查看已完成任务的分句文本
 - 悬浮播放器、点击分句跳转播放进度
 - 导出 SRT、TXT、Word
-- 微信支付充值点数
+- 微信小程序虚拟支付充值点数
 - 修改昵称、退出登录

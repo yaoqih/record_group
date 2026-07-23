@@ -60,7 +60,7 @@ function formatEntry(entry) {
       signup_bonus: '注册赠送',
       dev_signup_bonus: '注册赠送',
       recharge: '充值',
-      wechatpay_recharge: '微信充值',
+      wechat_virtual_recharge: '微信虚拟支付',
       consume: '转写消耗',
       transcription_refund: '转写退还',
       admin_adjustment_credit: '后台发放',

@@ -103,7 +103,7 @@ Page({
         timeout: REQUEST_TIMEOUT_MS
       })
       await requestVirtualPayment(data.payment)
-      this.setData({ error: '支付已提交，到账以微信支付通知为准，请稍后刷新余额' })
+      this.setData({ error: '虚拟支付已提交，到账以支付通知为准，请稍后刷新余额' })
     } catch (error) {
       if (isPaymentCancel(error)) {
         showToast(this, 'warning', '已取消支付')

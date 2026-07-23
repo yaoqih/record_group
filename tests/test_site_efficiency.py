@@ -166,7 +166,7 @@ def test_payment_confirmation_is_idempotent_and_atomic(tmp_path):
         recharge_entries = [
             item
             for item in store.list_point_ledger(user["id"])
-            if item["kind"] == "wechatpay_recharge"
+            if item["kind"] == "wechat_virtual_recharge"
         ]
         assert len(recharge_entries) == 1
     finally:

@@ -112,6 +112,8 @@ export WECHAT_VIRTUAL_APPKEY="sandbox-or-production-appkey"
 
 The client uses `wx.requestVirtualPayment`. Payment notification handling is intentionally not included yet; points must not be credited from the client success callback alone.
 
+Configure `WECHAT_MESSAGE_TOKEN` and set the mini-program message-push URL to `https://your-api-domain/wechat/callback`. The server validates WeChat's URL verification request before accepting the callback configuration.
+
 ## Run CLI
 
 ```bash

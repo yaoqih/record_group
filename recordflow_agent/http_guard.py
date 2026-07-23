@@ -66,8 +66,8 @@ class SlidingWindowRateLimiter:
                 "task_upload": RateLimitRule(
                     "task_upload", env_int("RECORDFLOW_RATE_LIMIT_TASK_UPLOAD_REQUESTS", 12)
                 ),
-                "wechatpay": RateLimitRule(
-                    "wechatpay", env_int("RECORDFLOW_RATE_LIMIT_WECHATPAY_REQUESTS", 12)
+                "virtual_payment": RateLimitRule(
+                    "virtual_payment", env_int("RECORDFLOW_RATE_LIMIT_VIRTUAL_PAYMENT_REQUESTS", 12)
                 ),
                 "export": RateLimitRule(
                     "export", env_int("RECORDFLOW_RATE_LIMIT_EXPORT_REQUESTS", 60)
@@ -195,8 +195,8 @@ def sensitive_rate_limit_scope(path: str, method: str = "") -> str | None:
         return "direct_upload_init"
     if path == "/site/me/tasks" and method.upper() == "POST":
         return "task_upload"
-    if "/wechatpay" in path:
-        return "wechatpay"
+    if "/recharge/virtual" in path:
+        return "virtual_payment"
     if path.endswith("/export"):
         return "export"
     return None

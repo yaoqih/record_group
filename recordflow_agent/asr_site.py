@@ -388,7 +388,7 @@ class ASRSiteStore:
         user_id: str,
         points: int,
         amount_cents: int,
-        provider: str = "wechatpay",
+        provider: str = "wechat_virtual",
     ) -> dict[str, Any]:
         self._execute(
             """
@@ -432,8 +432,8 @@ class ASRSiteStore:
             user = self._apply_points_without_commit(
                 user_id=order["user_id"],
                 delta=int(order["points"]),
-                kind="wechatpay_recharge",
-                note=f"wechatpay {out_trade_no}",
+                kind="wechat_virtual_recharge",
+                note=f"wechat_virtual {out_trade_no}",
                 task_id=None,
             )
             self.conn.execute(

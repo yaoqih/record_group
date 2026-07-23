@@ -6,11 +6,11 @@
   </view>
 
   <view wx:if="{{user}}" class="recharge-section">
-    <view class="section-heading"><view><view class="section-title">充值点数</view><view class="section-note">1 点 = ¥0.01，支付后即时到账</view></view><t-icon name="logo-wechatpay" size="40rpx" color="#07c160" /></view>
+    <view class="section-heading"><view><view class="section-title">充值点数</view><view class="section-note">1 点 = ¥0.01，支付后即时到账</view></view><t-icon name="wallet" size="40rpx" color="#07c160" /></view>
     <view class="point-grid">
       <view wx:for="{{pointOptions}}" wx:key="points" class="point-option {{selectedPoints == item.points ? 'point-option-active' : ''}}" data-points="{{item.points}}" bindtap="selectPoints"><view class="point-amount">{{item.points}}<text> 点</text></view><view class="point-price">¥{{item.price}}</view><view wx:if="{{item.tag}}" class="popular-tag">{{item.tag}}</view></view>
     </view>
-    <t-button block theme="primary" icon="logo-wechatpay" loading="{{paying}}" disabled="{{paying}}" data-points="{{selectedPoints}}" bind:tap="recharge">微信支付 ¥{{selectedPrice}}</t-button>
+    <t-button block theme="primary" icon="wallet" loading="{{paying}}" disabled="{{paying}}" data-points="{{selectedPoints}}" bind:tap="recharge">虚拟支付 ¥{{selectedPrice}}</t-button>
     <t-button class="custom-toggle" block theme="default" variant="text" size="small" bind:tap="toggleCustomPay">{{showCustomPay ? '收起自定义充值' : '自定义充值金额'}}</t-button>
     <view wx:if="{{showCustomPay}}" class="custom-pay"><t-input class="custom-input" type="number" value="{{customPoints}}" bind:change="onCustomPointsInput" placeholder="10-10000 点" /><t-button class="custom-button" theme="light" loading="{{payingCustom}}" disabled="{{paying}}" bind:tap="recharge">充值</t-button></view>
   </view>
