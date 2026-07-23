@@ -14,7 +14,7 @@ Install system packages:
 
 ```bash
 sudo apt update
-sudo apt install -y python3-venv ffmpeg postgresql-client
+sudo apt install -y python3-venv python3-cryptography ffmpeg postgresql-client
 ```
 
 ```bash
