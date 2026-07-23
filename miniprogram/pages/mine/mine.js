@@ -175,7 +175,9 @@ Page({
 
 function requestVirtualPayment(payment) {
   return new Promise((resolve, reject) => {
+    console.log('requestVirtualPayment start', payment)
     if (typeof wx.requestVirtualPayment !== 'function') {
+      console.error('requestVirtualPayment unavailable', typeof wx.requestVirtualPayment)
       reject(new Error('当前微信版本不支持虚拟支付'))
       return
     }
@@ -204,11 +206,9 @@ function requestVirtualPayment(payment) {
       paySig: payment.paySig,
       signature: payment.signature,
       signData: payment.signData,
-      success: (result) => settle(resolve, result),
-      fail: (err) => settle(reject, new Error(err.errMsg || '支付失败')),
-      complete: () => {
-        // Some DevTools versions only invoke complete when virtual payment is unavailable.
-      }
+      success: (result) => { console.log('requestVirtualPayment success', result); settle(resolve, result) },
+      fail: (err) => { console.error('requestVirtualPayment failed', err); settle(reject, new Error(err.errMsg || '支付失败')) },
+      complete: (result) => console.log('requestVirtualPayment complete', result)
     })
   })
 }
