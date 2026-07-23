@@ -33,12 +33,12 @@ python3 -m recordflow_agent.worker --db-path var/recordflow.db
 python3 -m recordflow_agent.worker --db-path var/recordflow.db --once
 ```
 
-## Neon / Postgres
+## PostgreSQL
 
 生产或共享测试环境不要用容器内 SQLite 文件。API 和 worker 必须连接同一个 Postgres：
 
 ```bash
-export DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"
+export DATABASE_URL="postgresql:///recordflow?host=/var/run/postgresql"
 
 uvicorn recordflow_agent.api:app --host 0.0.0.0 --port 8000
 python3 -m recordflow_agent.worker
@@ -114,7 +114,7 @@ curl -X POST http://localhost:8000/review/{change_event_id} \
 
 - FastAPI 后端。
 - SQLite 持久化。
-- Postgres / Neon 持久化。
+- PostgreSQL 持久化。
 - Workspace / Record / State / Review API。
 - 浏览器最小 UI。
 - 可选 API Key 鉴权。

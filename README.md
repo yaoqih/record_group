@@ -31,10 +31,10 @@ Run only the worker against a local DB:
 python3 -m recordflow_agent.worker --db-path var/recordflow.db --once
 ```
 
-Run API and worker against Postgres / Neon:
+Run API and worker against local or managed PostgreSQL:
 
 ```bash
-export DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"
+export DATABASE_URL="postgresql:///recordflow?host=/var/run/postgresql"
 
 uvicorn recordflow_agent.api:app --host 0.0.0.0 --port 8000
 python3 -m recordflow_agent.worker
@@ -165,7 +165,7 @@ X-API-Key: your-app-key
 - Two product modes: transcription/proofreading and detailed organization/summarization.
 - In-memory repository for fast MVP testing.
 - SQLite repository for deployable backend persistence.
-- Postgres repository for shared API/worker persistence on Neon or similar hosts.
+- PostgreSQL repository for shared API/worker persistence.
 - Admin-only browser console served by FastAPI at `/admin`.
 - Optional API key authentication.
 - DB-backed async job queue and worker.
@@ -180,8 +180,8 @@ RecordFlow chooses the repository from environment variables:
 - If `DATABASE_URL` starts with `postgresql://` or `postgres://`, the API and worker use Postgres.
 - Otherwise, they use SQLite at `RECORDFLOW_DB_PATH`, defaulting to a temporary local file.
 
-For MVP deployment on Neon, set `DATABASE_URL` in the hosting platform secret
-settings. Do not put the real connection string in source files or docs.
+For deployment, set `DATABASE_URL` in the service environment. Do not put real
+connection strings in source files or docs.
 
 See `docs/plans/2026-05-04-recordflow-backend-mvp-runbook.md` for API examples and deployment notes.
 
