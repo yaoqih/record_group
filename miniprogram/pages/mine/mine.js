@@ -191,7 +191,12 @@ function requestVirtualPayment(payment) {
       signature: payment.signature,
       signData: payment.signData,
       success: resolve,
-      fail: (err) => reject(new Error(err.errMsg || '支付失败'))
+      fail: (err) => {
+        console.error('requestVirtualPayment failed', err)
+        const message = [err.errMsg, err.errCode, err.code].filter(Boolean).join(' ') || '支付失败'
+        reject(new Error(message))
+      },
+      complete: (result) => console.log('requestVirtualPayment complete', result)
     })
   })
 }
