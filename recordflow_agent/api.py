@@ -322,7 +322,9 @@ def create_app(repo: object | None = None) -> FastAPI:
         if not msg_signature or not hmac.compare_digest(msg_signature, expected):
             raise HTTPException(status_code=403, detail="微信消息推送验签失败。")
         event = decrypt_wechat_message(encrypted, aes_key, appid)
+        LOGGER.info("wechat callback event keys=%s", sorted(str(key) for key in event))
         payment = find_virtual_payment_payload(event)
+        LOGGER.info("wechat callback payment payload found=%s", payment is not None)
         if payment is None:
             return {"errcode": "0", "errmsg": "success"}
         out_trade_no = str(payment.get("out_trade_no") or payment.get("outTradeNo") or "").strip()
