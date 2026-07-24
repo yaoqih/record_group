@@ -740,10 +740,12 @@ def create_app(repo: object | None = None) -> FastAPI:
         offer_id = os.getenv("WECHAT_VIRTUAL_OFFER_ID", "").strip()
         mode = os.getenv("WECHAT_VIRTUAL_MODE", "short_series_goods").strip()
         product_id = os.getenv("WECHAT_VIRTUAL_PRODUCT_ID", "").strip()
+        if not product_id and int(package["points"]) in {100, 500, 1000}:
+            product_id = f"dot_{int(package['points'])}"
         if mode not in {"short_series_goods", "short_series_coin"}:
             raise HTTPException(status_code=503, detail="微信虚拟支付模式配置无效。")
         if mode == "short_series_goods" and not product_id:
-            raise HTTPException(status_code=503, detail="微信虚拟支付商品尚未配置。")
+            raise HTTPException(status_code=400, detail="自定义点数暂无对应微信虚拟支付商品。")
         try:
             env = int(os.getenv("WECHAT_VIRTUAL_ENV", "1"))
         except ValueError as exc:
@@ -1664,9 +1666,9 @@ def get_or_create_site_workspace(repo: object) -> str:
 
 def recharge_package_or_400(points: int) -> dict[str, int | str]:
     packages = {
-        100: {"points": 100, "amount_cents": 100, "label": "100 点"},
-        500: {"points": 500, "amount_cents": 500, "label": "500 点"},
-        1000: {"points": 1000, "amount_cents": 1000, "label": "1000 点"},
+        100: {"points": 100, "amount_cents": 99, "label": "100 点"},
+        500: {"points": 500, "amount_cents": 499, "label": "500 点"},
+        1000: {"points": 1000, "amount_cents": 999, "label": "1000 点"},
     }
     package = packages.get(points)
     if package is not None:

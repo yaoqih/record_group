@@ -10,12 +10,12 @@ Page({
     userInitial: 'R',
     balanceYuan: '0.00',
     pointOptions: [
-      { points: 100, price: '1' },
-      { points: 500, price: '5', tag: '常用' },
-      { points: 1000, price: '10' }
+      { points: 100, price: '0.99' },
+      { points: 500, price: '4.99', tag: '常用' },
+      { points: 1000, price: '9.99' }
     ],
     selectedPoints: 500,
-    selectedPrice: '5',
+    selectedPrice: '4.99',
     showCustomPay: false,
     headerSubtitle: '登录后管理账户和充值点数',
     customPoints: 100,
