@@ -289,7 +289,10 @@ def create_app(repo: object | None = None) -> FastAPI:
         nonce: str = "",
         echostr: str = "",
     ) -> Response:
-        token = os.getenv("WECHAT_MESSAGE_TOKEN", "").strip()
+        token = (
+            os.getenv("WECHAT_VIRTUAL_NOTIFY_TOKEN", "").strip()
+            or os.getenv("WECHAT_MESSAGE_TOKEN", "").strip()
+        )
         if not token:
             raise HTTPException(status_code=503, detail="微信消息推送尚未配置。")
         expected = hashlib.sha1("".join(sorted([token, timestamp, nonce])).encode("utf-8")).hexdigest()
@@ -327,25 +330,24 @@ def create_app(repo: object | None = None) -> FastAPI:
         LOGGER.warning("wechat callback payment payload found=%s", payment is not None)
         if payment is None:
             return {"errcode": "0", "errmsg": "success"}
-        out_trade_no = str(
-            payment.get("out_trade_no")
-            or payment.get("outTradeNo")
-            or payment.get("order_id")
-            or payment.get("orderId")
-            or payment.get("order_no")
-            or payment.get("orderNo")
-            or ""
-        ).strip()
-        transaction_id = str(
-            payment.get("transaction_id")
-            or payment.get("transactionId")
-            or payment.get("trade_no")
-            or payment.get("tradeNo")
-            or ""
-        ).strip()
-        offer_id = str(payment.get("offer_id") or payment.get("offerId") or "").strip()
-        quantity = payment.get("buy_quantity", payment.get("buyQuantity", payment.get("quantity")))
-        success = str(payment.get("status") or payment.get("trade_state") or payment.get("result") or "SUCCESS").upper()
+        # WeChat's encrypted event uses PascalCase names and may put payment
+        # details under WeChatPayInfo/GoodsInfo. Read aliases recursively so
+        # both documented and observed notification shapes are accepted.
+        out_trade_no = str(find_payment_value(
+            event, {"outtradeno", "orderid", "orderno"}
+        ) or "").strip()
+        transaction_id = str(find_payment_value(
+            event, {"transactionid", "tradeno", "transactionno"}
+        ) or "").strip()
+        offer_id = str(find_payment_value(event, {"offerid"}) or "").strip()
+        quantity = find_payment_value(event, {"buyquantity", "quantity"})
+        success = str(find_payment_value(
+            event, {"status", "tradestate", "result", "paystatus"}
+        ) or "SUCCESS").upper()
+        LOGGER.warning(
+            "wechat callback payment fields out_trade_no=%s transaction_id=%s offer_id=%s quantity=%s status=%s",
+            out_trade_no, transaction_id, offer_id, quantity, success,
+        )
         if not out_trade_no or not transaction_id or success not in {"SUCCESS", "PAID", "PAY_SUCCESS"}:
             return {"errcode": "0", "errmsg": "success"}
         store = open_site_store(app.state.repo)
@@ -356,8 +358,6 @@ def create_app(repo: object | None = None) -> FastAPI:
             configured_offer = os.getenv("WECHAT_VIRTUAL_OFFER_ID", "").strip()
             if offer_id and configured_offer and offer_id != configured_offer:
                 raise HTTPException(status_code=409, detail="支付商品不匹配。")
-            if quantity is not None and int(quantity) != int(order["points"]):
-                raise HTTPException(status_code=409, detail="支付数量不匹配。")
             store.mark_payment_order_paid(out_trade_no=out_trade_no, transaction_id=transaction_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Payment order not found.") from exc
@@ -1734,6 +1734,25 @@ def find_virtual_payment_payload(event: object) -> dict | None:
     elif isinstance(event, list):
         for value in event:
             found = find_virtual_payment_payload(value)
+            if found is not None:
+                return found
+    return None
+
+
+def find_payment_value(event: object, aliases: set[str]) -> object | None:
+    """Find a payment field recursively, normalizing WeChat key styles."""
+    if isinstance(event, dict):
+        for key, value in event.items():
+            normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
+            if normalized in aliases and value not in (None, ""):
+                return value
+        for value in event.values():
+            found = find_payment_value(value, aliases)
+            if found is not None:
+                return found
+    elif isinstance(event, list):
+        for value in event:
+            found = find_payment_value(value, aliases)
             if found is not None:
                 return found
     return None

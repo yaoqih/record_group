@@ -1,9 +1,12 @@
+import base64
 import hashlib
 import json
 import os
+
 os.environ["RECORDFLOW_SKIP_DEFAULT_APP"] = "1"
 
 from fastapi.testclient import TestClient
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from recordflow_agent.api import create_app
 from recordflow_agent.asr_site import ASRSiteStore
@@ -198,9 +201,12 @@ def test_site_me_virtual_recharge_creates_virtual_payment_order(tmp_path, monkey
 
     assert response.status_code == 200
     payment = response.json()["payment"]
-    assert payment["mode"] == "currency"
+    assert payment["mode"] == "short_series_goods"
+    assert payment["env"] == 0
     assert payment["offerId"] == "offer-test"
-    assert payment["buyQuantity"] == 100
+    assert payment["productId"] == "dot_100"
+    assert payment["buyQuantity"] == 1
+    assert payment["goodsPrice"] == 99
     store = ASRSiteStore(repo)
     try:
         assert store.get_payment_order(payment["outTradeNo"])["provider"] == "wechat_virtual"
@@ -216,7 +222,7 @@ def test_wechat_callback_returns_echostr_after_token_validation(tmp_path, monkey
     signature = hashlib.sha1(
         "".join(sorted([token, timestamp, nonce])).encode("utf-8")
     ).hexdigest()
-    monkeypatch.setenv("WECHAT_MESSAGE_TOKEN", token)
+    monkeypatch.setenv("WECHAT_VIRTUAL_NOTIFY_TOKEN", token)
     client = TestClient(create_app(SQLiteRepository(tmp_path / "recordflow.db")))
 
     response = client.get(
@@ -231,6 +237,60 @@ def test_wechat_callback_returns_echostr_after_token_validation(tmp_path, monkey
 
     assert response.status_code == 200
     assert response.text == "wechat-challenge"
+
+
+def test_wechat_virtual_payment_callback_accepts_pascal_case_nested_fields(tmp_path, monkeypatch):
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+    token = "callback-token"
+    appid = "wx-test"
+    raw_key = bytes(range(32))
+    aes_key = base64.b64encode(raw_key).decode().rstrip("=")
+    monkeypatch.setenv("WECHAT_VIRTUAL_NOTIFY_TOKEN", token)
+    monkeypatch.setenv("WECHAT_VIRTUAL_NOTIFY_AES_KEY", aes_key)
+    monkeypatch.setenv("WECHAT_MINIAPP_APPID", appid)
+    monkeypatch.setenv("WECHAT_VIRTUAL_OFFER_ID", "offer-1")
+
+    store = ASRSiteStore(repo)
+    user = store.create_user("Alice")
+    store.create_payment_order(
+        out_trade_no="pay-1",
+        user_id=user["id"],
+        points=100,
+        amount_cents=99,
+    )
+    store.close()
+
+    event = {
+        "Event": "xpay_goods_deliver_notify",
+        "OutTradeNo": "pay-1",
+        "GoodsInfo": {"ProductId": "dot_100", "BuyQuantity": 1},
+        "WeChatPayInfo": {"TransactionId": "wx-1", "OfferId": "offer-1"},
+    }
+    message = json.dumps(event, separators=(",", ":")).encode()
+    plain = b"0123456789abcdef" + len(message).to_bytes(4, "big") + message + appid.encode()
+    pad = 32 - len(plain) % 32
+    padded = plain + bytes([pad]) * pad
+    encryptor = Cipher(algorithms.AES(raw_key), modes.CBC(raw_key[:16])).encryptor()
+    encrypted = base64.b64encode(encryptor.update(padded) + encryptor.finalize()).decode()
+    timestamp = "1720000000"
+    nonce = "nonce-1"
+    msg_signature = hashlib.sha1(
+        "".join(sorted([token, timestamp, nonce, encrypted])).encode()
+    ).hexdigest()
+
+    client = TestClient(create_app(repo))
+    response = client.post(
+        "/wechat/callback",
+        params={"timestamp": timestamp, "nonce": nonce, "msg_signature": msg_signature},
+        json={"Encrypt": encrypted},
+    )
+
+    assert response.status_code == 200
+    verification_store = ASRSiteStore(repo)
+    assert verification_store.get_payment_order("pay-1")["status"] == "paid"
+    assert verification_store.get_user(user["id"])["points_balance"] == 100
+    verification_store.close()
+    repo.close()
 
 
 def test_site_me_direct_upload_init_returns_cos_signed_put_request(tmp_path, monkeypatch):
