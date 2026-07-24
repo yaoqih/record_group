@@ -1697,6 +1697,7 @@ def decrypt_wechat_message(encrypted: str, encoding_aes_key: str, appid: str) ->
             raise ValueError("message payload must be an object")
         return payload
     except Exception as exc:
+        LOGGER.warning("wechat callback decrypt failed: %s", str(exc))
         raise HTTPException(status_code=400, detail="微信消息解密失败。") from exc
 
 
