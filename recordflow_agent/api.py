@@ -300,8 +300,14 @@ def create_app(repo: object | None = None) -> FastAPI:
     @app.post("/wechat/callback")
     async def receive_wechat_callback(request: Request) -> dict[str, str]:
         """Decrypt and idempotently apply WeChat virtual-payment notifications."""
-        token = os.getenv("WECHAT_MESSAGE_TOKEN", "").strip()
-        aes_key = os.getenv("WECHAT_MESSAGE_ENCODING_AES_KEY", "").strip()
+        token = (
+            os.getenv("WECHAT_VIRTUAL_NOTIFY_TOKEN", "").strip()
+            or os.getenv("WECHAT_MESSAGE_TOKEN", "").strip()
+        )
+        aes_key = (
+            os.getenv("WECHAT_VIRTUAL_NOTIFY_AES_KEY", "").strip()
+            or os.getenv("WECHAT_MESSAGE_ENCODING_AES_KEY", "").strip()
+        )
         appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
         timestamp = request.query_params.get("timestamp", "")
         nonce = request.query_params.get("nonce", "")
