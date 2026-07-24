@@ -102,12 +102,12 @@ python3 -m recordflow_agent.worker --poll-seconds 1
 
 Open `miniprogram/` in WeChat DevTools, set the real appid in `miniprogram/project.config.json`, and update `miniprogram/utils/config.js` when using a deployed HTTPS API domain.
 
-Recharge uses WeChat Mini Program Virtual Payment (currency mode). Configure these backend-only secrets before enabling payment:
+Recharge uses WeChat Mini Program Virtual Payment in the production cash-priced goods mode. Configure these backend-only secrets before enabling payment:
 
 ```bash
 export WECHAT_VIRTUAL_OFFER_ID="your-offer-id"
-export WECHAT_VIRTUAL_ENV="1" # 1=sandbox, 0=production
-export WECHAT_VIRTUAL_APPKEY="sandbox-or-production-appkey"
+export WECHAT_VIRTUAL_MODE="short_series_goods"
+export WECHAT_VIRTUAL_PRODUCTION_APPKEY="your-production-appkey"
 ```
 
 The client uses `wx.requestVirtualPayment`. The server validates encrypted message-push notifications and credits paid orders idempotently; points are never credited from the client success callback alone.

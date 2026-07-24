@@ -752,16 +752,8 @@ def create_app(repo: object | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="微信虚拟支付模式配置无效。")
         if mode == "short_series_goods" and not product_id:
             raise HTTPException(status_code=400, detail="自定义点数暂无对应微信虚拟支付商品。")
-        try:
-            env = int(os.getenv("WECHAT_VIRTUAL_ENV", "1"))
-        except ValueError as exc:
-            raise HTTPException(status_code=503, detail="微信虚拟支付环境配置无效。") from exc
-        if env not in {0, 1}:
-            raise HTTPException(status_code=503, detail="微信虚拟支付环境配置无效。")
-        appkey = os.getenv(
-            "WECHAT_VIRTUAL_PRODUCTION_APPKEY" if env == 0 else "WECHAT_VIRTUAL_SANDBOX_APPKEY",
-            "",
-        ).strip() or os.getenv("WECHAT_VIRTUAL_APPKEY", "").strip()
+        env = 0
+        appkey = os.getenv("WECHAT_VIRTUAL_PRODUCTION_APPKEY", "").strip()
         if not appid or not offer_id or not appkey:
             raise HTTPException(status_code=503, detail="微信虚拟支付尚未配置。")
         store = open_site_store(app.state.repo)

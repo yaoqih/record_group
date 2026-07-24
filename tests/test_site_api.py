@@ -174,8 +174,7 @@ def test_site_me_virtual_recharge_creates_virtual_payment_order(tmp_path, monkey
     client = TestClient(app)
     monkeypatch.setenv("WECHAT_MINIAPP_APPID", "wx-test")
     monkeypatch.setenv("WECHAT_VIRTUAL_OFFER_ID", "offer-test")
-    monkeypatch.setenv("WECHAT_VIRTUAL_SANDBOX_APPKEY", "virtual-appkey")
-    monkeypatch.setenv("WECHAT_VIRTUAL_ENV", "1")
+    monkeypatch.setenv("WECHAT_VIRTUAL_PRODUCTION_APPKEY", "virtual-appkey")
     monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
 
     store = ASRSiteStore(repo)
