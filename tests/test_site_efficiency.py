@@ -2,6 +2,7 @@ import os
 
 os.environ["RECORDFLOW_SKIP_DEFAULT_APP"] = "1"
 
+import pytest
 from fastapi.testclient import TestClient
 
 from recordflow_agent.api import create_app, create_site_session_token
@@ -157,6 +158,11 @@ def test_payment_confirmation_is_idempotent_and_atomic(tmp_path):
             out_trade_no="pay-1",
             transaction_id="wx-1",
         )
+        with pytest.raises(ValueError, match="does not match"):
+            store.mark_payment_order_paid(
+                out_trade_no="pay-1",
+                transaction_id="wx-other",
+            )
 
         assert first_credited is True
         assert second_credited is False

@@ -2,13 +2,14 @@ const api = require('../../utils/api')
 
 const REQUEST_TIMEOUT_MS = 10000
 const PAGE_CACHE_MS = 3000
+const PAYMENT_SETTLEMENT_ATTEMPTS = 12
+const PAYMENT_SETTLEMENT_INTERVAL_MS = 1000
 
 Page({
   data: {
     user: null,
     displayName: '微信用户',
     userInitial: 'R',
-    balanceYuan: '0.00',
     pointOptions: [
       { points: 100, price: '0.99' },
       { points: 500, price: '4.99', tag: '常用' },
@@ -16,13 +17,9 @@ Page({
     ],
     selectedPoints: 500,
     selectedPrice: '4.99',
-    showCustomPay: false,
     headerSubtitle: '登录后管理账户和充值点数',
-    customPoints: 100,
     loading: false,
     paying: false,
-    payingPoints: 0,
-    payingCustom: false,
     error: ''
   },
 
@@ -35,10 +32,6 @@ Page({
   async onPullDownRefresh() {
     await this.loadMe({ silent: true, forceRefresh: true })
     wx.stopPullDownRefresh()
-  },
-
-  onCustomPointsInput(event) {
-    this.setData({ customPoints: normalizePoints(inputValue(event)) })
   },
 
   async loadMe(options = {}) {
@@ -82,20 +75,9 @@ Page({
 
   async recharge(event) {
     if (this.data.paying) return
-    const fixedPoints = Number(eventDataset(event).points || 0)
-    const points = fixedPoints || normalizePoints(this.data.customPoints)
-    if (points < 10 || points > 10000) {
-      this.setData({ error: '充值点数范围为 10-10000' })
-      return
-    }
+    const points = Number(eventDataset(event).points || 0)
     if (!points) return
-    this.setData({
-      paying: true,
-      payingPoints: fixedPoints,
-      payingCustom: !fixedPoints,
-      customPoints: fixedPoints ? this.data.customPoints : points,
-      error: ''
-    })
+    this.setData({ paying: true, error: '' })
     try {
       const data = await api.request('/site/me/recharge/virtual', {
         method: 'POST',
@@ -103,7 +85,14 @@ Page({
         timeout: REQUEST_TIMEOUT_MS
       })
       await requestVirtualPayment(data.payment)
-      this.setData({ error: '支付已提交，到账以微信支付通知为准，请稍后刷新余额' })
+      const settlement = await waitForPaymentSettlement(data.payment.outTradeNo)
+      if (settlement) {
+        this.applyUser(settlement.user)
+        getApp().globalData.user = settlement.user
+        showToast(this, 'success', `${data.package.points} 点已到账`)
+      } else {
+        this.setData({ error: '支付成功，微信通知仍在处理中，请稍后下拉刷新余额' })
+      }
     } catch (error) {
       if (isPaymentCancel(error)) {
         showToast(this, 'warning', '已取消支付')
@@ -111,7 +100,7 @@ Page({
         this.setData({ error: error.message })
       }
     } finally {
-      this.setData({ paying: false, payingPoints: 0, payingCustom: false })
+      this.setData({ paying: false })
     }
   },
 
@@ -122,17 +111,12 @@ Page({
     if (option) this.setData({ selectedPoints: points, selectedPrice: option.price })
   },
 
-  toggleCustomPay() {
-    this.setData({ showCustomPay: !this.data.showCustomPay })
-  },
-
   applyUser(user) {
     if (userSignature(user) === userSignature(this.data.user)) return
     this.setData({
       user,
       displayName: user.nickname || user.name || 'RecordFlow 用户',
       userInitial: userInitial(user.nickname || user.name),
-      balanceYuan: (Number(user.points_balance || 0) / 100).toFixed(2),
       headerSubtitle: '管理账户和点数充值'
     })
   },
@@ -175,26 +159,26 @@ Page({
 
 function requestVirtualPayment(payment) {
   return new Promise((resolve, reject) => {
-    console.log('requestVirtualPayment start', payment)
     if (typeof wx.requestVirtualPayment !== 'function') {
-      console.error('requestVirtualPayment unavailable', typeof wx.requestVirtualPayment)
       reject(new Error('当前微信版本不支持虚拟支付'))
       return
     }
-    if (!payment || !payment.offerId || !payment.outTradeNo || !payment.paySig || !payment.signature) {
+    if (
+      !payment ||
+      payment.mode !== 'short_series_goods' ||
+      payment.env !== 0 ||
+      !payment.offerId ||
+      !payment.productId ||
+      payment.buyQuantity !== 1 ||
+      !Number.isInteger(payment.goodsPrice) ||
+      !payment.outTradeNo ||
+      !payment.paySig ||
+      !payment.signature ||
+      !payment.signData
+    ) {
       reject(new Error('支付参数不完整，请稍后重试'))
       return
     }
-    let settled = false
-    const settle = (handler, value) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      handler(value)
-    }
-    const timer = setTimeout(() => {
-      settle(reject, new Error('微信支付响应超时，请检查微信版本或在真机中重试'))
-    }, 15000)
     wx.requestVirtualPayment({
       mode: payment.mode,
       env: payment.env,
@@ -208,16 +192,31 @@ function requestVirtualPayment(payment) {
       paySig: payment.paySig,
       signature: payment.signature,
       signData: payment.signData,
-      success: (result) => { console.log('requestVirtualPayment success', result); settle(resolve, result) },
-      fail: (err) => { console.error('requestVirtualPayment failed', err); settle(reject, new Error(err.errMsg || '支付失败')) },
-      complete: (result) => console.log('requestVirtualPayment complete', result)
+      success: resolve,
+      fail: (err) => reject(new Error(err.errMsg || '支付失败'))
     })
   })
 }
 
-function inputValue(event) {
-  const detail = event.detail || {}
-  return typeof detail === 'object' && 'value' in detail ? detail.value : detail
+async function waitForPaymentSettlement(outTradeNo) {
+  const encodedTradeNo = encodeURIComponent(outTradeNo)
+  for (let attempt = 0; attempt < PAYMENT_SETTLEMENT_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) await delay(PAYMENT_SETTLEMENT_INTERVAL_MS)
+    try {
+      const data = await api.request(`/site/me/payments/${encodedTradeNo}`, {
+        forceRefresh: true,
+        timeout: REQUEST_TIMEOUT_MS
+      })
+      if (data.payment && data.payment.status === 'paid') return data
+    } catch (error) {
+      if (isAuthError(error)) throw error
+    }
+  }
+  return null
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
 function eventDataset(event) {
@@ -231,10 +230,6 @@ function eventDataset(event) {
 function showToast(page, theme, message, duration = 2000) {
   const toast = page.selectComponent('#t-toast')
   if (toast) toast.show({ theme, message, duration })
-}
-
-function normalizePoints(value) {
-  return Math.floor(Number(value) || 0)
 }
 
 function userInitial(value) {

@@ -108,11 +108,19 @@ Recharge uses WeChat Mini Program Virtual Payment in the production cash-priced 
 export WECHAT_VIRTUAL_OFFER_ID="your-offer-id"
 export WECHAT_VIRTUAL_MODE="short_series_goods"
 export WECHAT_VIRTUAL_PRODUCTION_APPKEY="your-production-appkey"
+export WECHAT_VIRTUAL_NOTIFY_TOKEN="your-message-push-token"
+export WECHAT_VIRTUAL_NOTIFY_AES_KEY="your-43-character-encoding-aes-key"
+export WECHAT_VIRTUAL_NOTIFY_URL="https://your-api-domain/wechat/callback"
 ```
 
-The client uses `wx.requestVirtualPayment`. The server validates encrypted message-push notifications and credits paid orders idempotently; points are never credited from the client success callback alone.
+The published production goods must use these IDs and prices: `dot_100` at ¥0.99,
+`dot_500` at ¥4.99, and `dot_1000` at ¥9.99. The client uses
+`wx.requestVirtualPayment`; custom amounts and sandbox payments are not supported.
 
-Configure `WECHAT_MESSAGE_TOKEN` and set the mini-program message-push URL to `https://your-api-domain/wechat/callback`. The server validates WeChat's URL verification request before accepting the callback configuration.
+Configure Mini Program message push in secure JSON mode with the callback URL above.
+The server verifies and decrypts delivery notifications, validates them against the
+stored order, and credits points transactionally and idempotently. Client-side payment
+success never credits points directly.
 
 ## Run CLI
 

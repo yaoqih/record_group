@@ -54,6 +54,19 @@ from recordflow_agent.pipeline import process_record
 from recordflow_agent.profiles import load_profile
 from recordflow_agent.repository_factory import create_repository
 from recordflow_agent.serialization import to_jsonable
+from recordflow_agent.virtual_payment import (
+    VirtualPaymentConfigurationError,
+    VirtualPaymentNotificationError,
+    VirtualPaymentNotificationSettings,
+    VirtualPaymentSettings,
+    build_payment_parameters,
+    decrypt_wechat_envelope,
+    decrypt_wechat_notification,
+    get_product,
+    parse_payment_notification,
+    validate_payment_notification,
+    verify_wechat_signature,
+)
 from recordflow_agent.web_ui import ADMIN_SITE_HTML, AGREEMENT_HTML
 from recordflow_agent.wechat_subscribe import task_complete_subscription_config
 
@@ -285,85 +298,94 @@ def create_app(repo: object | None = None) -> FastAPI:
     @app.get("/wechat/callback")
     def verify_wechat_callback(
         signature: str = "",
+        msg_signature: str = "",
         timestamp: str = "",
         nonce: str = "",
         echostr: str = "",
     ) -> Response:
-        token = (
-            os.getenv("WECHAT_VIRTUAL_NOTIFY_TOKEN", "").strip()
-            or os.getenv("WECHAT_MESSAGE_TOKEN", "").strip()
-        )
-        if not token:
+        try:
+            settings = VirtualPaymentNotificationSettings.from_env()
+        except VirtualPaymentConfigurationError:
             raise HTTPException(status_code=503, detail="微信消息推送尚未配置。")
-        expected = hashlib.sha1("".join(sorted([token, timestamp, nonce])).encode("utf-8")).hexdigest()
-        if not signature or not hmac.compare_digest(signature, expected):
+        if msg_signature:
+            if not verify_wechat_signature(
+                settings.token, msg_signature, timestamp, nonce, echostr
+            ):
+                raise HTTPException(status_code=403, detail="微信消息推送验签失败。")
+            try:
+                challenge = decrypt_wechat_envelope(
+                    echostr, settings.aes_key, settings.appid
+                )
+            except VirtualPaymentNotificationError as exc:
+                raise HTTPException(status_code=400, detail="微信消息验证内容解密失败。") from exc
+            return Response(content=challenge, media_type="text/plain")
+        if not verify_wechat_signature(settings.token, signature, timestamp, nonce):
             raise HTTPException(status_code=403, detail="微信消息推送验签失败。")
         return Response(content=echostr, media_type="text/plain")
 
     @app.post("/wechat/callback")
-    async def receive_wechat_callback(request: Request) -> dict[str, str]:
+    async def receive_wechat_callback(request: Request) -> Response:
         """Decrypt and idempotently apply WeChat virtual-payment notifications."""
-        token = (
-            os.getenv("WECHAT_VIRTUAL_NOTIFY_TOKEN", "").strip()
-            or os.getenv("WECHAT_MESSAGE_TOKEN", "").strip()
-        )
-        aes_key = (
-            os.getenv("WECHAT_VIRTUAL_NOTIFY_AES_KEY", "").strip()
-            or os.getenv("WECHAT_MESSAGE_ENCODING_AES_KEY", "").strip()
-        )
-        appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
+        try:
+            settings = VirtualPaymentNotificationSettings.from_env()
+        except VirtualPaymentConfigurationError as exc:
+            raise HTTPException(status_code=503, detail="微信消息推送尚未配置。") from exc
         timestamp = request.query_params.get("timestamp", "")
         nonce = request.query_params.get("nonce", "")
         msg_signature = request.query_params.get("msg_signature", "")
-        if not token or not aes_key or not appid:
-            raise HTTPException(status_code=503, detail="微信消息推送尚未配置。")
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="微信消息体不是有效 JSON。") from exc
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="微信消息体不是 JSON 对象。")
         encrypted = str(body.get("Encrypt") or body.get("encrypt") or "")
         if not encrypted:
             raise HTTPException(status_code=400, detail="微信消息体缺少 Encrypt。")
-        expected = hashlib.sha1("".join(sorted([token, timestamp, nonce, encrypted])).encode()).hexdigest()
-        if not msg_signature or not hmac.compare_digest(msg_signature, expected):
+        if not verify_wechat_signature(
+            settings.token, msg_signature, timestamp, nonce, encrypted
+        ):
             raise HTTPException(status_code=403, detail="微信消息推送验签失败。")
-        event = decrypt_wechat_message(encrypted, aes_key, appid)
-        LOGGER.warning("wechat callback event keys=%s event=%s", sorted(str(key) for key in event), event.get("Event"))
-        payment = find_virtual_payment_payload(event)
-        LOGGER.warning("wechat callback payment payload found=%s", payment is not None)
+        try:
+            event = decrypt_wechat_notification(
+                encrypted, settings.aes_key, settings.appid
+            )
+            payment = parse_payment_notification(event)
+        except VirtualPaymentNotificationError as exc:
+            LOGGER.warning("invalid virtual-payment notification: %s", str(exc))
+            raise HTTPException(status_code=400, detail="微信虚拟支付通知格式无效。") from exc
         if payment is None:
-            return {"errcode": "0", "errmsg": "success"}
-        # WeChat's encrypted event uses PascalCase names and may put payment
-        # details under WeChatPayInfo/GoodsInfo. Read aliases recursively so
-        # both documented and observed notification shapes are accepted.
-        out_trade_no = str(find_payment_value(
-            event, {"outtradeno", "orderid", "orderno"}
-        ) or "").strip()
-        transaction_id = str(find_payment_value(
-            event, {"transactionid", "tradeno", "transactionno"}
-        ) or "").strip()
-        offer_id = str(find_payment_value(event, {"offerid"}) or "").strip()
-        quantity = find_payment_value(event, {"buyquantity", "quantity"})
-        success = str(find_payment_value(
-            event, {"status", "tradestate", "result", "paystatus"}
-        ) or "SUCCESS").upper()
-        LOGGER.warning(
-            "wechat callback payment fields out_trade_no=%s transaction_id=%s offer_id=%s quantity=%s status=%s",
-            out_trade_no, transaction_id, offer_id, quantity, success,
-        )
-        if not out_trade_no or not transaction_id or success not in {"SUCCESS", "PAID", "PAY_SUCCESS"}:
-            return {"errcode": "0", "errmsg": "success"}
+            return Response(content="success", media_type="text/plain")
         store = open_site_store(app.state.repo)
         try:
-            order = store.get_payment_order(out_trade_no)
-            if order["provider"] != "wechat_virtual":
-                raise HTTPException(status_code=409, detail="支付订单提供商不匹配。")
-            configured_offer = os.getenv("WECHAT_VIRTUAL_OFFER_ID", "").strip()
-            if offer_id and configured_offer and offer_id != configured_offer:
-                raise HTTPException(status_code=409, detail="支付商品不匹配。")
-            store.mark_payment_order_paid(out_trade_no=out_trade_no, transaction_id=transaction_id)
+            order = store.get_payment_order(payment.out_trade_no)
+            expected_openid = str(order.get("openid") or "") or str(
+                store.get_user_wechat_openid(order["user_id"], settings.appid) or ""
+            )
+            validate_payment_notification(
+                payment,
+                order=order,
+                settings=settings,
+                expected_openid=expected_openid,
+            )
+            _, credited = store.mark_payment_order_paid(
+                out_trade_no=payment.out_trade_no,
+                transaction_id=payment.transaction_id,
+            )
+            LOGGER.info(
+                "virtual payment delivered out_trade_no=%s credited=%s",
+                payment.out_trade_no,
+                credited,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Payment order not found.") from exc
+        except VirtualPaymentNotificationError as exc:
+            raise HTTPException(status_code=409, detail="微信虚拟支付通知与订单不匹配。") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         finally:
             store.close()
-        return {"errcode": "0", "errmsg": "success"}
+        return Response(content="success", media_type="text/plain")
 
     @app.get("/dashboard")
     def dashboard() -> dict:
@@ -757,48 +779,63 @@ def create_app(repo: object | None = None) -> FastAPI:
 
     @app.post("/site/me/recharge/virtual")
     def create_site_me_virtual_recharge(request: Request, body: CreateVirtualRechargeRequest) -> dict:
-        package = recharge_package_or_400(body.points)
-        appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
-        offer_id = os.getenv("WECHAT_VIRTUAL_OFFER_ID", "").strip()
-        mode = os.getenv("WECHAT_VIRTUAL_MODE", "short_series_goods").strip()
-        product_id = os.getenv("WECHAT_VIRTUAL_PRODUCT_ID", "").strip()
-        if not product_id and int(package["points"]) in {100, 500, 1000}:
-            product_id = f"dot_{int(package['points'])}"
-        if mode not in {"short_series_goods", "short_series_coin"}:
-            raise HTTPException(status_code=503, detail="微信虚拟支付模式配置无效。")
-        if mode == "short_series_goods" and not product_id:
-            raise HTTPException(status_code=400, detail="自定义点数暂无对应微信虚拟支付商品。")
-        env = 0
-        appkey = os.getenv("WECHAT_VIRTUAL_PRODUCTION_APPKEY", "").strip()
-        if not appid or not offer_id or not appkey:
-            raise HTTPException(status_code=503, detail="微信虚拟支付尚未配置。")
+        product = get_product(body.points)
+        if product is None:
+            raise HTTPException(status_code=400, detail="请选择已发布的微信虚拟支付道具。")
+        try:
+            settings = VirtualPaymentSettings.from_env()
+        except VirtualPaymentConfigurationError as exc:
+            raise HTTPException(status_code=503, detail="微信虚拟支付尚未配置。") from exc
         store = open_site_store(app.state.repo)
         try:
             user = require_site_session_user(request, store)
-            identity = store.get_user_wechat_identity(user["id"], appid)
+            identity = store.get_user_wechat_identity(user["id"], settings.appid)
             if not identity or not identity.get("openid") or not identity.get("session_key"):
                 raise HTTPException(status_code=400, detail="当前账号没有有效的微信登录态。")
+            out_trade_no = f"rfv_{int(time.time())}_{secrets.token_hex(6)}"
+            payment = build_payment_parameters(
+                settings=settings,
+                product=product,
+                session_key=str(identity["session_key"]),
+                out_trade_no=out_trade_no,
+            )
+            store.create_payment_order(
+                out_trade_no=out_trade_no,
+                user_id=user["id"],
+                points=product.points,
+                amount_cents=product.amount_cents,
+                product_id=product.product_id,
+                offer_id=settings.offer_id,
+                openid=str(identity["openid"]),
+            )
+            return {"package": product.public_dict(), "payment": payment}
         finally:
             store.close()
-        out_trade_no = f"rfv_{int(time.time())}_{secrets.token_hex(6)}"
-        sign_data = json.dumps({
-            "mode": mode,
-            "offerId": offer_id,
-            "productId": product_id,
-            "buyQuantity": 1,
-            "goodsPrice": int(package["amount_cents"]),
-            "currencyType": "CNY",
-            "env": env,
-            "outTradeNo": out_trade_no,
-        }, ensure_ascii=False, separators=(",", ":"))
-        pay_sig = hmac.new(appkey.encode(), ("requestVirtualPayment&" + sign_data).encode(), hashlib.sha256).hexdigest()
-        signature = hmac.new(str(identity["session_key"]).encode(), sign_data.encode(), hashlib.sha256).hexdigest()
+
+    @app.get("/site/me/payments/{out_trade_no}")
+    def get_site_me_payment(request: Request, out_trade_no: str) -> dict:
         store = open_site_store(app.state.repo)
         try:
-            store.create_payment_order(out_trade_no=out_trade_no, user_id=user["id"], points=int(package["points"]), amount_cents=int(package["amount_cents"]), provider="wechat_virtual")
+            user = require_site_session_user(request, store)
+            try:
+                order = store.get_payment_order(out_trade_no)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="支付订单不存在。") from exc
+            if order["user_id"] != user["id"] or order["provider"] != "wechat_virtual":
+                raise HTTPException(status_code=404, detail="支付订单不存在。")
+            return {
+                "payment": {
+                    "out_trade_no": order["out_trade_no"],
+                    "product_id": order.get("product_id") or "",
+                    "points": order["points"],
+                    "amount_cents": order["amount_cents"],
+                    "status": order["status"],
+                    "paid_at": order["paid_at"],
+                },
+                "user": user,
+            }
         finally:
             store.close()
-        return {"package": package, "payment": {"mode": mode, "env": env, "offerId": offer_id, "productId": product_id, "buyQuantity": 1, "goodsPrice": int(package["amount_cents"]), "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
 
     @app.get("/site/me/tasks")
     def list_site_me_tasks(request: Request) -> dict:
@@ -1678,86 +1715,6 @@ def get_or_create_site_workspace(repo: object) -> str:
     return repo.create_workspace(SITE_WORKSPACE_NAME, SITE_WORKSPACE_PROFILE)
 
 
-def recharge_package_or_400(points: int) -> dict[str, int | str]:
-    packages = {
-        100: {"points": 100, "amount_cents": 99, "label": "100 点"},
-        500: {"points": 500, "amount_cents": 499, "label": "500 点"},
-        1000: {"points": 1000, "amount_cents": 999, "label": "1000 点"},
-    }
-    package = packages.get(points)
-    if package is not None:
-        return package
-    if points < 10 or points > 10000:
-        raise HTTPException(status_code=400, detail="充值点数范围为 10-10000。")
-    return {"points": points, "amount_cents": points, "label": f"{points} 点"}
-
-
-def decrypt_wechat_message(encrypted: str, encoding_aes_key: str, appid: str) -> dict:
-    try:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        raw_key = base64.b64decode(encoding_aes_key + "=")
-        ciphertext = base64.b64decode(encrypted)
-        decryptor = Cipher(algorithms.AES(raw_key), modes.CBC(raw_key[:16])).decryptor()
-        padded = decryptor.update(ciphertext) + decryptor.finalize()
-        pad = padded[-1]
-        if pad < 1 or pad > 32 or padded[-pad:] != bytes([pad]) * pad:
-            raise ValueError("invalid PKCS7 padding")
-        plain = padded[:-pad]
-        if len(plain) < 20:
-            raise ValueError("decrypted message is too short")
-        message_length = int.from_bytes(plain[16:20], "big")
-        message = plain[20 : 20 + message_length].decode("utf-8")
-        message_appid = plain[20 + message_length :].decode("utf-8")
-        if message_appid != appid:
-            raise ValueError("appid mismatch")
-        payload = json.loads(message)
-        if not isinstance(payload, dict):
-            raise ValueError("message payload must be an object")
-        return payload
-    except Exception as exc:
-        LOGGER.warning("wechat callback decrypt failed: %s", str(exc))
-        raise HTTPException(status_code=400, detail="微信消息解密失败。") from exc
-
-
-def find_virtual_payment_payload(event: object) -> dict | None:
-    if isinstance(event, dict):
-        keys = {str(key).lower().replace("_", ""): key for key in event}
-        payment_keys = {
-            "outtradeno", "transactionid", "offerid", "buyquantity", "orderid", "productid"
-        }
-        if payment_keys.intersection(keys):
-            return event
-        for value in event.values():
-            found = find_virtual_payment_payload(value)
-            if found is not None:
-                return found
-    elif isinstance(event, list):
-        for value in event:
-            found = find_virtual_payment_payload(value)
-            if found is not None:
-                return found
-    return None
-
-
-def find_payment_value(event: object, aliases: set[str]) -> object | None:
-    """Find a payment field recursively, normalizing WeChat key styles."""
-    if isinstance(event, dict):
-        for key, value in event.items():
-            normalized = "".join(ch for ch in str(key).lower() if ch.isalnum())
-            if normalized in aliases and value not in (None, ""):
-                return value
-        for value in event.values():
-            found = find_payment_value(value, aliases)
-            if found is not None:
-                return found
-    elif isinstance(event, list):
-        for value in event:
-            found = find_payment_value(value, aliases)
-            if found is not None:
-                return found
-    return None
-
-
 def exchange_wechat_code_for_session(*, appid: str, secret: str, code: str) -> dict:
     query = urlencode(
         {
@@ -1849,6 +1806,13 @@ def validate_site_session_configuration() -> None:
         site_session_secret()
         if not os.getenv("RECORDFLOW_APP_API_KEY", "").strip():
             raise RuntimeError("RECORDFLOW_APP_API_KEY is required in production for admin APIs.")
+        try:
+            VirtualPaymentSettings.from_env()
+            VirtualPaymentNotificationSettings.from_env()
+        except VirtualPaymentConfigurationError as exc:
+            raise RuntimeError(
+                "Production WeChat virtual-payment configuration is required."
+            ) from exc
 
 
 def recordflow_environment() -> str:

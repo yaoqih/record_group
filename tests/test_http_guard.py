@@ -133,6 +133,27 @@ def test_production_requires_admin_api_key(tmp_path, monkeypatch):
     repo.close()
 
 
+def test_production_requires_virtual_payment_configuration(tmp_path, monkeypatch):
+    monkeypatch.setattr(api_module, "load_dotenv", lambda: None)
+    monkeypatch.setenv("RECORDFLOW_ENV", "production")
+    monkeypatch.setenv("RECORDFLOW_SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("RECORDFLOW_APP_API_KEY", "admin-secret")
+    for name in (
+        "WECHAT_MINIAPP_APPID",
+        "WECHAT_VIRTUAL_OFFER_ID",
+        "WECHAT_VIRTUAL_PRODUCTION_APPKEY",
+        "WECHAT_VIRTUAL_NOTIFY_TOKEN",
+        "WECHAT_VIRTUAL_NOTIFY_AES_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    repo = SQLiteRepository(tmp_path / "recordflow.db")
+
+    with pytest.raises(RuntimeError, match="virtual-payment configuration"):
+        create_app(repo)
+
+    repo.close()
+
+
 def test_query_session_token_remains_compatible_but_logs_deprecation(
     tmp_path, monkeypatch, caplog
 ):

@@ -388,16 +388,31 @@ class ASRSiteStore:
         user_id: str,
         points: int,
         amount_cents: int,
+        product_id: str = "",
+        offer_id: str = "",
+        openid: str = "",
+        environment: int = 0,
         provider: str = "wechat_virtual",
     ) -> dict[str, Any]:
         self._execute(
             """
             INSERT INTO site_payment_orders(
-                out_trade_no, user_id, provider, points, amount_cents, status
+                out_trade_no, user_id, provider, points, amount_cents,
+                product_id, offer_id, openid, environment, status
             )
-            VALUES ({}, {}, {}, {}, {}, 'created')
+            VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, 'created')
             """,
-            (out_trade_no, user_id, provider, points, amount_cents),
+            (
+                out_trade_no,
+                user_id,
+                provider,
+                points,
+                amount_cents,
+                product_id,
+                offer_id,
+                openid,
+                environment,
+            ),
         )
         return self.get_payment_order(out_trade_no)
 
@@ -416,6 +431,9 @@ class ASRSiteStore:
         out_trade_no: str,
         transaction_id: str,
     ) -> tuple[dict[str, Any], bool]:
+        if not transaction_id.strip():
+            raise ValueError("Payment transaction ID is required.")
+
         def mark_paid() -> tuple[dict[str, Any], bool]:
             lock_clause = " FOR UPDATE" if self.backend == "postgres" else ""
             row = self.conn.execute(
@@ -428,7 +446,11 @@ class ASRSiteStore:
                 raise KeyError(out_trade_no)
             order = self._row_dict(row)
             if order["status"] == "paid":
+                if order["transaction_id"] != transaction_id:
+                    raise ValueError("Payment transaction ID does not match the paid order.")
                 return self.get_user(order["user_id"]), False
+            if order["status"] not in {"created", "notpay"}:
+                raise ValueError(f"Payment order cannot be paid from status {order['status']}.")
             user = self._apply_points_without_commit(
                 user_id=order["user_id"],
                 delta=int(order["points"]),
@@ -505,25 +527,6 @@ class ASRSiteStore:
         except Exception:
             self.conn.rollback()
             raise
-
-    def mark_payment_order_status(
-        self,
-        *,
-        out_trade_no: str,
-        status: str,
-        transaction_id: str = "",
-    ) -> dict[str, Any]:
-        self._execute(
-            """
-            UPDATE site_payment_orders
-            SET status = {},
-                transaction_id = COALESCE(NULLIF({}, ''), transaction_id),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE out_trade_no = {}
-            """,
-            (status, transaction_id, out_trade_no),
-        )
-        return self.get_payment_order(out_trade_no)
 
     def create_pending_task(
         self,
@@ -1248,12 +1251,39 @@ class ASRSiteStore:
                     provider TEXT NOT NULL,
                     points INTEGER NOT NULL,
                     amount_cents INTEGER NOT NULL,
+                    product_id TEXT NOT NULL DEFAULT '',
+                    offer_id TEXT NOT NULL DEFAULT '',
+                    openid TEXT NOT NULL DEFAULT '',
+                    environment INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
                     transaction_id TEXT NOT NULL DEFAULT '',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     paid_at TIMESTAMPTZ
                 )
+                """
+            )
+            self.conn.execute(
+                "ALTER TABLE site_payment_orders "
+                "ADD COLUMN IF NOT EXISTS product_id TEXT NOT NULL DEFAULT ''"
+            )
+            self.conn.execute(
+                "ALTER TABLE site_payment_orders "
+                "ADD COLUMN IF NOT EXISTS offer_id TEXT NOT NULL DEFAULT ''"
+            )
+            self.conn.execute(
+                "ALTER TABLE site_payment_orders "
+                "ADD COLUMN IF NOT EXISTS openid TEXT NOT NULL DEFAULT ''"
+            )
+            self.conn.execute(
+                "ALTER TABLE site_payment_orders "
+                "ADD COLUMN IF NOT EXISTS environment INTEGER NOT NULL DEFAULT 0"
+            )
+            self.conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_site_payment_orders_transaction
+                ON site_payment_orders(transaction_id)
+                WHERE transaction_id <> ''
                 """
             )
             self.conn.execute(
@@ -1358,6 +1388,10 @@ class ASRSiteStore:
                     provider TEXT NOT NULL,
                     points INTEGER NOT NULL,
                     amount_cents INTEGER NOT NULL,
+                    product_id TEXT NOT NULL DEFAULT '',
+                    offer_id TEXT NOT NULL DEFAULT '',
+                    openid TEXT NOT NULL DEFAULT '',
+                    environment INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
                     transaction_id TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1403,6 +1437,25 @@ class ASRSiteStore:
                     local_file_path TEXT,
                     local_expires_at TEXT
                 );
+                """
+            )
+            self._ensure_sqlite_column(
+                "site_payment_orders", "product_id", "TEXT NOT NULL DEFAULT ''"
+            )
+            self._ensure_sqlite_column(
+                "site_payment_orders", "offer_id", "TEXT NOT NULL DEFAULT ''"
+            )
+            self._ensure_sqlite_column(
+                "site_payment_orders", "openid", "TEXT NOT NULL DEFAULT ''"
+            )
+            self._ensure_sqlite_column(
+                "site_payment_orders", "environment", "INTEGER NOT NULL DEFAULT 0"
+            )
+            self.conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_site_payment_orders_transaction
+                ON site_payment_orders(transaction_id)
+                WHERE transaction_id <> ''
                 """
             )
             self._ensure_sqlite_column("site_asr_tasks", "original_size_bytes", "INTEGER NOT NULL DEFAULT 0")
