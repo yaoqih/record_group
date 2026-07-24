@@ -327,10 +327,24 @@ def create_app(repo: object | None = None) -> FastAPI:
         LOGGER.info("wechat callback payment payload found=%s", payment is not None)
         if payment is None:
             return {"errcode": "0", "errmsg": "success"}
-        out_trade_no = str(payment.get("out_trade_no") or payment.get("outTradeNo") or "").strip()
-        transaction_id = str(payment.get("transaction_id") or payment.get("transactionId") or "").strip()
+        out_trade_no = str(
+            payment.get("out_trade_no")
+            or payment.get("outTradeNo")
+            or payment.get("order_id")
+            or payment.get("orderId")
+            or payment.get("order_no")
+            or payment.get("orderNo")
+            or ""
+        ).strip()
+        transaction_id = str(
+            payment.get("transaction_id")
+            or payment.get("transactionId")
+            or payment.get("trade_no")
+            or payment.get("tradeNo")
+            or ""
+        ).strip()
         offer_id = str(payment.get("offer_id") or payment.get("offerId") or "").strip()
-        quantity = payment.get("buy_quantity", payment.get("buyQuantity"))
+        quantity = payment.get("buy_quantity", payment.get("buyQuantity", payment.get("quantity")))
         success = str(payment.get("status") or payment.get("trade_state") or payment.get("result") or "SUCCESS").upper()
         if not out_trade_no or not transaction_id or success not in {"SUCCESS", "PAID", "PAY_SUCCESS"}:
             return {"errcode": "0", "errmsg": "success"}
@@ -1708,7 +1722,9 @@ def decrypt_wechat_message(encrypted: str, encoding_aes_key: str, appid: str) ->
 def find_virtual_payment_payload(event: object) -> dict | None:
     if isinstance(event, dict):
         keys = {str(key).lower().replace("_", ""): key for key in event}
-        payment_keys = {"outtradeno", "transactionid", "offerid", "buyquantity"}
+        payment_keys = {
+            "outtradeno", "transactionid", "offerid", "buyquantity", "orderid", "productid"
+        }
         if payment_keys.intersection(keys):
             return event
         for value in event.values():
