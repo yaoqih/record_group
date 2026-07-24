@@ -1687,9 +1687,11 @@ def decrypt_wechat_message(encrypted: str, encoding_aes_key: str, appid: str) ->
         if pad < 1 or pad > 32 or padded[-pad:] != bytes([pad]) * pad:
             raise ValueError("invalid PKCS7 padding")
         plain = padded[:-pad]
-        message_length = int.from_bytes(plain[0:4], "big")
-        message = plain[4 : 4 + message_length].decode("utf-8")
-        message_appid = plain[4 + message_length :].decode("utf-8")
+        if len(plain) < 20:
+            raise ValueError("decrypted message is too short")
+        message_length = int.from_bytes(plain[16:20], "big")
+        message = plain[20 : 20 + message_length].decode("utf-8")
+        message_appid = plain[20 + message_length :].decode("utf-8")
         if message_appid != appid:
             raise ValueError("appid mismatch")
         payload = json.loads(message)
