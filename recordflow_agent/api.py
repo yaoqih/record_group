@@ -738,6 +738,9 @@ def create_app(repo: object | None = None) -> FastAPI:
         package = recharge_package_or_400(body.points)
         appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
         offer_id = os.getenv("WECHAT_VIRTUAL_OFFER_ID", "").strip()
+        mode = os.getenv("WECHAT_VIRTUAL_MODE", "short_series_goods").strip()
+        if mode not in {"short_series_goods", "short_series_coin"}:
+            raise HTTPException(status_code=503, detail="微信虚拟支付模式配置无效。")
         try:
             env = int(os.getenv("WECHAT_VIRTUAL_ENV", "1"))
         except ValueError as exc:
@@ -760,6 +763,7 @@ def create_app(repo: object | None = None) -> FastAPI:
             store.close()
         out_trade_no = f"rfv_{int(time.time())}_{secrets.token_hex(6)}"
         sign_data = json.dumps({
+            "mode": mode,
             "offerId": offer_id,
             "buyQuantity": int(package["points"]),
             "currencyType": "CNY",
@@ -773,7 +777,7 @@ def create_app(repo: object | None = None) -> FastAPI:
             store.create_payment_order(out_trade_no=out_trade_no, user_id=user["id"], points=int(package["points"]), amount_cents=int(package["amount_cents"]), provider="wechat_virtual")
         finally:
             store.close()
-        return {"package": package, "payment": {"mode": "currency", "env": env, "offerId": offer_id, "buyQuantity": int(package["points"]), "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
+        return {"package": package, "payment": {"mode": mode, "env": env, "offerId": offer_id, "buyQuantity": int(package["points"]), "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
 
     @app.get("/site/me/tasks")
     def list_site_me_tasks(request: Request) -> dict:
