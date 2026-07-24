@@ -10,7 +10,7 @@
     <view class="point-grid">
       <view wx:for="{{pointOptions}}" wx:key="points" class="point-option {{selectedPoints == item.points ? 'point-option-active' : ''}}" data-points="{{item.points}}" bindtap="selectPoints"><view class="point-amount">{{item.points}}<text> 点</text></view><view class="point-price">¥{{item.price}}</view><view wx:if="{{item.tag}}" class="popular-tag">{{item.tag}}</view></view>
     </view>
-    <t-button block theme="primary" icon="wallet" loading="{{paying}}" disabled="{{paying}}" data-points="{{selectedPoints}}" bind:tap="recharge">虚拟支付 ¥{{selectedPrice}}</t-button>
+    <t-button block theme="primary" icon="wallet" loading="{{paying}}" disabled="{{paying}}" data-points="{{selectedPoints}}" bind:tap="recharge">微信支付 ¥{{selectedPrice}}</t-button>
   </view>
 
   <view wx:if="{{!user}}" class="guest-card"><view class="guest-icon"><t-icon name="user-circle" size="64rpx" color="#08705d" /></view><view class="guest-title">登录 RecordFlow</view><view class="guest-copy">同步任务、管理点数并随时查看转写结果。</view><t-button block theme="primary" icon="logo-wechat" bind:tap="goLogin">去登录</t-button></view>
