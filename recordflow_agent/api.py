@@ -739,8 +739,11 @@ def create_app(repo: object | None = None) -> FastAPI:
         appid = os.getenv("WECHAT_MINIAPP_APPID", "").strip()
         offer_id = os.getenv("WECHAT_VIRTUAL_OFFER_ID", "").strip()
         mode = os.getenv("WECHAT_VIRTUAL_MODE", "short_series_goods").strip()
+        product_id = os.getenv("WECHAT_VIRTUAL_PRODUCT_ID", "").strip()
         if mode not in {"short_series_goods", "short_series_coin"}:
             raise HTTPException(status_code=503, detail="微信虚拟支付模式配置无效。")
+        if mode == "short_series_goods" and not product_id:
+            raise HTTPException(status_code=503, detail="微信虚拟支付商品尚未配置。")
         try:
             env = int(os.getenv("WECHAT_VIRTUAL_ENV", "1"))
         except ValueError as exc:
@@ -765,7 +768,9 @@ def create_app(repo: object | None = None) -> FastAPI:
         sign_data = json.dumps({
             "mode": mode,
             "offerId": offer_id,
+            "productId": product_id,
             "buyQuantity": int(package["points"]),
+            "goodsPrice": int(package["amount_cents"]),
             "currencyType": "CNY",
             "env": env,
             "outTradeNo": out_trade_no,
@@ -777,7 +782,7 @@ def create_app(repo: object | None = None) -> FastAPI:
             store.create_payment_order(out_trade_no=out_trade_no, user_id=user["id"], points=int(package["points"]), amount_cents=int(package["amount_cents"]), provider="wechat_virtual")
         finally:
             store.close()
-        return {"package": package, "payment": {"mode": mode, "env": env, "offerId": offer_id, "buyQuantity": int(package["points"]), "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
+        return {"package": package, "payment": {"mode": mode, "env": env, "offerId": offer_id, "productId": product_id, "buyQuantity": int(package["points"]), "goodsPrice": int(package["amount_cents"]), "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
 
     @app.get("/site/me/tasks")
     def list_site_me_tasks(request: Request) -> dict:
