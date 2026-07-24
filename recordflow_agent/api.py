@@ -772,7 +772,7 @@ def create_app(repo: object | None = None) -> FastAPI:
             "offerId": offer_id,
             "productId": product_id,
             "buyQuantity": 1,
-            "goodsPrice": int(package["amount_cents"]) / 100,
+            "goodsPrice": int(package["amount_cents"]),
             "currencyType": "CNY",
             "env": env,
             "outTradeNo": out_trade_no,
@@ -784,7 +784,7 @@ def create_app(repo: object | None = None) -> FastAPI:
             store.create_payment_order(out_trade_no=out_trade_no, user_id=user["id"], points=int(package["points"]), amount_cents=int(package["amount_cents"]), provider="wechat_virtual")
         finally:
             store.close()
-        return {"package": package, "payment": {"mode": mode, "env": env, "offerId": offer_id, "productId": product_id, "buyQuantity": 1, "goodsPrice": int(package["amount_cents"]) / 100, "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
+        return {"package": package, "payment": {"mode": mode, "env": env, "offerId": offer_id, "productId": product_id, "buyQuantity": 1, "goodsPrice": int(package["amount_cents"]), "currencyType": "CNY", "outTradeNo": out_trade_no, "attach": json.dumps({"points": package["points"]}, ensure_ascii=False), "paySig": pay_sig, "signature": signature, "signData": sign_data}}
 
     @app.get("/site/me/tasks")
     def list_site_me_tasks(request: Request) -> dict:
